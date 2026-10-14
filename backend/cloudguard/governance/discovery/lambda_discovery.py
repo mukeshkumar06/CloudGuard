@@ -13,7 +13,9 @@ log = logging.getLogger(__name__)
 RESOURCE_TYPE = "AWS::Lambda::Function"
 
 
-def discover_lambda(client, region: str, now: datetime) -> tuple[list[DiscoveredResource], list[ServiceError]]:
+def discover_lambda(
+    client, region: str, account_id: str, now: datetime
+) -> tuple[list[DiscoveredResource], list[ServiceError]]:
     resources: list[DiscoveredResource] = []
     errors: list[ServiceError] = []
     try:
@@ -28,6 +30,7 @@ def discover_lambda(client, region: str, now: datetime) -> tuple[list[Discovered
                     log.warning("lambda tag inspection failed", extra={"arn": arn, "code": tag_error.code})
                 resources.append(
                     DiscoveredResource(
+                        account_id=account_id,
                         resource_type=RESOURCE_TYPE,
                         service="lambda",
                         resource_id=fn["FunctionName"],

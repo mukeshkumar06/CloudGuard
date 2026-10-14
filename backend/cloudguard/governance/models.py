@@ -47,6 +47,7 @@ class InspectionError(_Frozen):
 class DiscoveredResource(_Frozen):
     """A resource found by service-specific discovery, with its raw tags (or why they are unknown)."""
 
+    account_id: str
     resource_type: str  # CloudFormation-style type, e.g. "AWS::Lambda::Function"
     service: str
     resource_id: str
@@ -75,7 +76,7 @@ class ServiceError(_Frozen):
 
 class DiscoveryResult(_Frozen):
     account_id: str
-    region: str
+    regions: list[str]
     resources: list[DiscoveredResource]
     service_errors: list[ServiceError] = Field(default_factory=list)
 
@@ -95,6 +96,7 @@ class Evidence(_Frozen):
 
 class TagFinding(_Frozen):
     finding_id: str  # stable per resource ARN, so scans can be compared over time
+    account_id: str
     resource_type: str
     service: str
     resource_id: str
@@ -124,7 +126,7 @@ class ScanSummary(_Frozen):
 class GovernanceScan(_Frozen):
     scan_id: str
     account_id: str
-    region: str
+    regions: list[str]
     mode: str  # "live" or "fixture"
     started_at: datetime
     completed_at: datetime

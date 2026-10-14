@@ -25,3 +25,4 @@ packages = ["cloudguard"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: live AWS tests; need CLOUDGUARD_IT_REGION (read-only)"]

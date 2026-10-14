@@ -38,6 +38,8 @@ Out of scope: multi-account/Organizations, replacing Security Hub/Config, and au
 
 - Install / sync: `cd backend; uv sync`
 - Tests (offline, no AWS): `cd backend; uv run pytest`
+- Live integration tests (read-only): set `CLOUDGUARD_IT_REGION=ap-south-1`, then `uv run pytest -m integration`
+- Scan: `python -m cloudguard.governance scan --mode fixture` or `--mode live --region ap-south-1 [--region us-east-1]`
 - On this machine, uv installed from inside Claude is sandbox-redirected. If `uv` isn't on PATH, use `.venv\Scripts\python.exe` directly.
 
 ## Restrictions

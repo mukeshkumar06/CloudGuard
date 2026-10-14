@@ -29,6 +29,7 @@ def finding_id_for(resource_arn: str) -> str:
 def evaluate(resource: DiscoveredResource, policy: TagPolicy, scanned_at: datetime) -> TagFinding:
     common = dict(
         finding_id=finding_id_for(resource.resource_arn),
+        account_id=resource.account_id,
         resource_type=resource.resource_type,
         service=resource.service,
         resource_id=resource.resource_id,
@@ -122,7 +123,7 @@ def run_scan(source: DiscoverySource, policy: TagPolicy) -> GovernanceScan:
     return GovernanceScan(
         scan_id=f"scan-{started:%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:6]}",
         account_id=discovery.account_id,
-        region=discovery.region,
+        regions=discovery.regions,
         mode=source.mode,
         started_at=started,
         completed_at=datetime.now(UTC),

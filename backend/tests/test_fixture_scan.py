@@ -19,7 +19,8 @@ def by_name(s, name):
 
 def test_fixture_scan_summary():
     s = scan()
-    assert s.mode == "fixture" and s.account_id == "123456789012"
+    assert s.mode == "fixture" and s.account_id == "123456789012" and s.regions == ["ap-south-1"]
+    assert all(f.account_id == "123456789012" for f in s.findings)
     assert s.summary.total_resources == 6
     assert s.summary.compliant_resources == 1
     assert s.summary.non_compliant_resources == 4

@@ -1,4 +1,8 @@
-"""Amazon EC2 instance discovery. DescribeInstances returns tags inline, so no per-resource tag call."""
+"""Amazon EC2 instance discovery. DescribeInstances returns tags inline, so no per-resource tag call.
+
+Instances in the `shutting-down` and `terminated` states are excluded: they can't be meaningfully
+governed and AWS removes them on its own (terminated instances stay visible for about an hour).
+"""
 
 from __future__ import annotations
 
@@ -9,26 +13,28 @@ from cloudguard.governance.models import DiscoveredResource, ServiceError
 
 RESOURCE_TYPE = "AWS::EC2::Instance"
 
-# Terminated instances disappear on their own; governance only cares about live ones.
-_LIVE_STATES = ["pending", "running", "stopping", "stopped"]
+LIVE_STATES = ["pending", "running", "stopping", "stopped"]
 
 
-def discover_ec2(client, region: str, partition: str, now: datetime) -> tuple[list[DiscoveredResource], list[ServiceError]]:
+def discover_ec2(
+    client, region: str, account_id: str, partition: str, now: datetime
+) -> tuple[list[DiscoveredResource], list[ServiceError]]:
     resources: list[DiscoveredResource] = []
     errors: list[ServiceError] = []
     try:
         pages = client.get_paginator("describe_instances").paginate(
-            Filters=[{"Name": "instance-state-name", "Values": _LIVE_STATES}]
+            Filters=[{"Name": "instance-state-name", "Values": LIVE_STATES}]
         )
         for page in pages:
             for reservation in page.get("Reservations", []):
-                owner = reservation.get("OwnerId", "")
+                owner = reservation.get("OwnerId") or account_id
                 for inst in reservation.get("Instances", []):
                     instance_id = inst["InstanceId"]
                     tags = {t["Key"]: t["Value"] for t in inst.get("Tags", [])}
                     name = next((v for k, v in tags.items() if k == "Name" and v.strip()), instance_id)
                     resources.append(
                         DiscoveredResource(
+                            account_id=account_id,
                             resource_type=RESOURCE_TYPE,
                             service="ec2",
                             resource_id=instance_id,

@@ -33,30 +33,36 @@ class DiscoverySource(Protocol):
 
 
 class LiveSource:
+    """Discovers resources in the authenticated account across one or more regions."""
+
     mode = "live"
 
-    def __init__(self, session: boto3.Session, region: str):
+    def __init__(self, session: boto3.Session, regions: list[str]):
+        if not regions:
+            raise ValueError("at least one region is required")
         self.session = session
-        self.region = region
+        self.regions = list(dict.fromkeys(regions))  # de-duplicate, keep order
 
-    def _client(self, service: str):
-        return self.session.client(service, region_name=self.region, config=BOTO_CONFIG)
+    def _client(self, service: str, region: str):
+        return self.session.client(service, region_name=region, config=BOTO_CONFIG)
 
     def discover(self) -> DiscoveryResult:
         now = datetime.now(UTC)
-        account_id = self._client("sts").get_caller_identity()["Account"]
-        partition = self.session.get_partition_for_region(self.region)
+        # The real authenticated account; never taken from configuration.
+        account_id = self._client("sts", self.regions[0]).get_caller_identity()["Account"]
         resources, errors = [], []
-        for found, errs in (
-            discover_lambda(self._client("lambda"), self.region, now),
-            discover_dynamodb(self._client("dynamodb"), self.region, account_id, partition, now),
-            discover_s3(self._client("s3"), self.region, partition, now),
-            discover_ec2(self._client("ec2"), self.region, partition, now),
-        ):
-            resources.extend(found)
-            errors.extend(errs)
+        for region in self.regions:
+            partition = self.session.get_partition_for_region(region)
+            for found, errs in (
+                discover_lambda(self._client("lambda", region), region, account_id, now),
+                discover_dynamodb(self._client("dynamodb", region), region, account_id, partition, now),
+                discover_s3(self._client("s3", region), region, account_id, partition, now),
+                discover_ec2(self._client("ec2", region), region, account_id, partition, now),
+            ):
+                resources.extend(found)
+                errors.extend(errs)
         log.info("discovery complete", extra={"resources": len(resources), "service_errors": len(errors)})
-        return DiscoveryResult(account_id=account_id, region=self.region, resources=resources, service_errors=errors)
+        return DiscoveryResult(account_id=account_id, regions=self.regions, resources=resources, service_errors=errors)
 
 
 class FixtureSource:

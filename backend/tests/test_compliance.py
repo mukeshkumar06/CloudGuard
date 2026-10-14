@@ -19,6 +19,7 @@ FULL = {"Environment": "dev", "Project": "cloudguard", "Owner": "eng", "CostCent
 
 def resource(tags=None, tag_error=None, arn="arn:aws:lambda:ap-south-1:123456789012:function:fn"):
     return DiscoveredResource(
+        account_id="123456789012",
         resource_type="AWS::Lambda::Function",
         service="lambda",
         resource_id="fn",

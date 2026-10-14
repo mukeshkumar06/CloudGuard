@@ -28,6 +28,7 @@ def discover_dynamodb(
     try:
         for page in client.get_paginator("list_tables").paginate():
             for name in page.get("TableNames", []):
+                # Fallback ARN in case DescribeTable fails; replaced by the authoritative one below.
                 arn = f"arn:{partition}:dynamodb:{region}:{account_id}:table/{name}"
                 tags: dict[str, str] | None = None
                 tag_error: InspectionError | None = None
@@ -41,6 +42,7 @@ def discover_dynamodb(
                     log.warning("dynamodb tag inspection failed", extra={"table": name, "code": tag_error.code})
                 resources.append(
                     DiscoveredResource(
+                        account_id=account_id,
                         resource_type=RESOURCE_TYPE,
                         service="dynamodb",
                         resource_id=name,

@@ -39,7 +39,10 @@ def main(argv: list[str] | None = None) -> int:
     scan = sub.add_parser("scan", help="Run a tag-compliance scan")
     scan.add_argument("--mode", choices=["fixture", "live"], default="fixture")
     scan.add_argument("--fixture", type=Path, default=DEFAULT_FIXTURE)
-    scan.add_argument("--region", default=None, help="Live mode region (default: profile/env region)")
+    scan.add_argument(
+        "--region", action="append", dest="regions", default=None,
+        help="Live mode region; repeat for multiple (default: profile/env region)",
+    )
     scan.add_argument("--profile", default=None, help="Live mode AWS profile")
     scan.add_argument("--policy", type=Path, default=None, help="Tag policy JSON (default: built-in 4 tags)")
     scan.add_argument("--record", type=Path, default=None, help="Live mode: also save raw discovery as a fixture")
@@ -49,11 +52,11 @@ def main(argv: list[str] | None = None) -> int:
     policy = TagPolicy.load(args.policy) if args.policy else DEFAULT_POLICY
 
     if args.mode == "live":
-        session = boto3.Session(profile_name=args.profile, region_name=args.region)
-        region = session.region_name
-        if not region:
+        session = boto3.Session(profile_name=args.profile)
+        regions = args.regions or ([session.region_name] if session.region_name else [])
+        if not regions:
             parser.error("no region configured; pass --region")
-        source = LiveSource(session, region)
+        source = LiveSource(session, regions)
         if args.record:
             discovery = source.discover()
             args.record.write_text(discovery.model_dump_json(indent=2), encoding="utf-8")
