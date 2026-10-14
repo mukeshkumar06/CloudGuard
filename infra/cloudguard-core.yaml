@@ -1,0 +1,151 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  CloudGuard AI core: read-only inspector role, scan-history table, and a cost budget alert.
+  Deploy once per account/region.
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Default: ""
+    Description: >
+      Email for budget alerts. Leave empty to skip the budget (e.g. on the AWS Free plan,
+      which cannot incur charges, or when the deployer lacks budgets permissions).
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 20
+    Description: Monthly cost budget (USD) for the whole account; alerts at 50%, 80% and forecast 100%.
+
+Conditions:
+  CreateBudget: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Resources:
+  # Role the CloudGuard backend assumes. Read-only by design; the only writes are
+  # scan-history persistence, Bedrock invocation, and approval-gated governance tagging.
+  InspectorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: CloudGuardInspectorRole
+      Description: Assumed by CloudGuard AI to inspect this account (read-only + approved tagging).
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/SecurityAudit
+        - arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
+      Policies:
+        - PolicyName: CloudGuardRuntime
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: InvokeBedrockModels
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                  - bedrock:Converse
+                  - bedrock:ConverseStream
+                Resource:
+                  - arn:aws:bedrock:*::foundation-model/*
+                  - !Sub arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*
+              - Sid: ScanHistory
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:Query
+                  - dynamodb:BatchWriteItem
+                Resource: !GetAtt ScanTable.Arn
+              # Approval-gated remediation: governance tags only. The application also
+              # enforces the key allow-list and requires explicit user approval.
+              - Sid: GovernanceTaggingOnly
+                Effect: Allow
+                Action:
+                  - tag:TagResources
+                  - lambda:TagResource
+                  - ec2:CreateTags
+                  - dynamodb:TagResource
+                Resource: "*"
+                Condition:
+                  ForAllValues:StringEquals:
+                    aws:TagKeys: [Owner, Project, Environment, CostCenter]
+              - Sid: S3BucketTagging
+                Effect: Allow
+                Action:
+                  - s3:PutBucketTagging
+                Resource: "*"
+
+  # Single-table store for scans and findings.
+  #   pk = SCOPE#<account>#<region>   sk = SCAN#<iso-timestamp>
+  ScanTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: cloudguard-scans
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: sk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: sk
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+      Tags:
+        - Key: Project
+          Value: cloudguard
+        - Key: Owner
+          Value: cloudguard-maintainer
+        - Key: Environment
+          Value: dev
+
+  CostBudget:
+    Type: AWS::Budgets::Budget
+    Condition: CreateBudget
+    Properties:
+      Budget:
+        BudgetName: cloudguard-hackathon-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit:
+          Amount: !Ref MonthlyBudgetUsd
+          Unit: USD
+      NotificationsWithSubscribers:
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 50
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: ACTUAL
+            ComparisonOperator: GREATER_THAN
+            Threshold: 80
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+        - Notification:
+            NotificationType: FORECASTED
+            ComparisonOperator: GREATER_THAN
+            Threshold: 100
+            ThresholdType: PERCENTAGE
+          Subscribers:
+            - SubscriptionType: EMAIL
+              Address: !Ref AlertEmail
+
+Outputs:
+  InspectorRoleArn:
+    Value: !GetAtt InspectorRole.Arn
+  ScanTableName:
+    Value: !Ref ScanTable

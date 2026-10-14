@@ -1,0 +1,27 @@
+[project]
+name = "cloudguard"
+version = "0.1.0"
+description = "Voice-first, agentic AWS governance assistant exposed over MCP"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = [
+    "boto3>=1.40",
+    "pydantic>=2.9",
+    "mcp>=1.29,<2",
+    "strands-agents>=1.60",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["cloudguard"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [],
+    "ask": [
+      "Bash(aws:*)",
+      "Bash(cdk deploy:*)",
+      "Bash(cdk destroy:*)",
+      "Bash(sam deploy:*)",
+      "Bash(terraform apply:*)",
+      "Bash(terraform destroy:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.aws/config)",
+      "Edit(~/.aws/**)",
+      "Write(~/.aws/**)"
+    ]
+  }
+}
