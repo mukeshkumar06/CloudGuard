@@ -15,6 +15,7 @@ from cloudguard.governance.custom_tagging.models import PolicyViolation, Rejecti
 from cloudguard.governance.policy import MAX_KEY_LEN, MAX_VALUE_LEN, TagRule
 
 MAX_TAGS_PER_RESOURCE = 50
+RESERVED_PREFIX = "cloudguard:"  # CloudGuard's own markers; never writable through a tagging request
 _ALLOWED = re.compile(r"^[\w\s.:/=+\-@]*$", re.UNICODE)
 
 
@@ -27,6 +28,11 @@ def validate_tag(key: str, value: str) -> Rejection | None:
         return Rejection(code=RejectionCode.INVALID_TAG, message=f"tag key exceeds {MAX_KEY_LEN} characters")
     if key.lower().startswith("aws:"):
         return Rejection(code=RejectionCode.INVALID_TAG, message=f"tag key {key!r} uses the reserved 'aws:' prefix")
+    if key.lower().startswith(RESERVED_PREFIX):
+        # Checked case-insensitively: IAM matches tag-key names in conditions case-insensitively, and
+        # IAM's prefix deny (StringLike) can't, so this is the complete guard for CloudGuard markers.
+        return Rejection(code=RejectionCode.INVALID_TAG, message=f"tag key {key!r} uses the reserved 'cloudguard:' prefix",
+                         hint="cloudguard: tags (e.g. cloudguard:protected) are managed outside tagging requests")
     if not _ALLOWED.match(key):
         return Rejection(code=RejectionCode.INVALID_TAG, message=f"tag key {key!r} contains characters AWS doesn't allow",
                          hint="allowed: letters, digits, spaces and _ . : / = + - @")

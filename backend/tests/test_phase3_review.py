@@ -53,18 +53,41 @@ def test_tagger_role_has_no_key_allow_list_but_denies_protected_keys_and_resourc
     role = statements(load("tagger-role-policy.json"))
     allow_conditions = json.dumps([s.get("Condition", {}) for s in role.values() if s["Effect"] == "Allow"])
     assert "aws:TagKeys" not in allow_conditions  # F1: custom keys allowed at the ceiling
-    protected = role["NeverWriteProtectedTagKeys"]
-    assert protected["Effect"] == "Deny" and "cloudguard:*" in protected["Condition"]["ForAnyValue:StringLike"]["aws:TagKeys"]
-    assert "s3:PutBucketTagging" not in actions(protected)  # S3 doesn't support aws:TagKeys
+    exact = role["NeverWriteProtectedTagKeysAnyCase"]
+    assert exact["Effect"] == "Deny"
+    assert "cloudguard:protected" in exact["Condition"]["ForAnyValue:StringEqualsIgnoreCase"]["aws:TagKeys"]
+    prefix = role["NeverWriteCloudGuardPrefixedKeys"]
+    assert prefix["Effect"] == "Deny" and "cloudguard:*" in prefix["Condition"]["ForAnyValue:StringLike"]["aws:TagKeys"]
+    for stmt in (exact, prefix):
+        assert "s3:PutBucketTagging" not in actions(stmt)  # S3 doesn't support aws:TagKeys
     res = role["NeverTouchProtectedResources"]
-    assert "s3:PutBucketTagging" in actions(res) and "aws:ResourceTag/cloudguard:protected" in res["Condition"]["StringEquals"]
+    assert "s3:PutBucketTagging" in actions(res)
+    assert res["Condition"] == {"StringEqualsIgnoreCase": {"aws:ResourceTag/cloudguard:protected": "true"}}
 
 
-def test_trust_policy_is_not_the_account_root():
-    (stmt,) = load("tagger-trust-policy.json")["Statement"]
-    principal = stmt["Principal"]["AWS"]
-    assert not principal.endswith(":root") and ":role/" in principal  # F7
-    assert stmt["Condition"]["StringLike"]["sts:RoleSessionName"] == "cg-proposal-*"
+def test_protected_key_denies_are_not_case_sensitive_for_exact_keys():
+    """IAM matches tag-key names in condition keys case-insensitively, so exact protected keys must be
+    denied with an IgnoreCase operator, or 'TEAM' would bypass a deny on 'team'."""
+    role = load("tagger-role-policy.json")
+    for stmt in role["Statement"]:
+        if stmt["Effect"] == "Deny" and "Condition" in stmt:
+            ops = set(stmt["Condition"])
+            exact_key_lists = [v.get("aws:TagKeys", []) for op, v in stmt["Condition"].items() if "StringEquals" in op]
+            assert not any("StringEquals" in op and "IgnoreCase" not in op for op in ops), stmt["Sid"]
+            assert all("*" not in k for keys in exact_key_lists for k in keys)
+
+
+def test_trust_policy_is_a_specific_role_with_split_conditions():
+    trust = statements(load("tagger-trust-policy.json"))
+    for stmt in trust.values():
+        principal = stmt["Principal"]["AWS"]
+        assert not principal.endswith(":root") and ":role/" in principal  # F7
+    assume = trust["OnlyTheCloudGuardBackendWithAProposalSession"]
+    assert assume["Action"] == "sts:AssumeRole"
+    assert assume["Condition"] == {"StringLike": {"sts:RoleSessionName": "cg-proposal-*"}}
+    source = trust["SourceIdentityMustNameCloudGuard"]
+    assert source["Action"] == "sts:SetSourceIdentity"
+    assert source["Condition"] == {"StringLike": {"sts:SourceIdentity": "cloudguard:*"}}
 
 
 def test_session_policy_example_binds_exact_resources_keys_and_values():
@@ -85,7 +108,10 @@ def test_design_doc_covers_findings_and_verified_condition_keys():
     for finding in ("F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"):
         assert f"| {finding} |" in doc
     assert "s3:PutBucketTagging` supports no `aws:TagKeys`/`aws:RequestTag`" in doc
-    assert "list_s3.html" in doc and "Not yet verified" in doc
+    assert "list_s3.html" in doc and "Syntactically valid JSON only" in doc
+    for must in ("Access Analyzer", "The session policy is voluntary", "StringLikeIgnoreCase",
+                 "DeleteBucketTagging", "condition key names are not case-sensitive"):
+        assert must in doc
 
 
 def test_approval_readiness_doc_lists_binding_and_revalidation():

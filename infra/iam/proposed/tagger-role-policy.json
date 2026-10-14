@@ -53,12 +53,21 @@
       "Resource": "*"
     },
     {
-      "Sid": "NeverWriteProtectedTagKeys",
+      "Sid": "NeverWriteProtectedTagKeysAnyCase",
       "Effect": "Deny",
       "Action": ["lambda:TagResource", "dynamodb:TagResource", "ec2:CreateTags"],
       "Resource": "*",
       "Condition": {
-        "ForAnyValue:StringLike": {"aws:TagKeys": ["cloudguard:*", "<PROTECTED_TAG_KEY_PATTERNS>"]}
+        "ForAnyValue:StringEqualsIgnoreCase": {"aws:TagKeys": ["cloudguard:protected", "<PROTECTED_TAG_KEYS>"]}
+      }
+    },
+    {
+      "Sid": "NeverWriteCloudGuardPrefixedKeys",
+      "Effect": "Deny",
+      "Action": ["lambda:TagResource", "dynamodb:TagResource", "ec2:CreateTags"],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringLike": {"aws:TagKeys": ["cloudguard:*", "CloudGuard:*", "CLOUDGUARD:*", "Cloudguard:*"]}
       }
     },
     {
@@ -67,7 +76,7 @@
       "Action": ["lambda:TagResource", "dynamodb:TagResource", "ec2:CreateTags", "s3:PutBucketTagging"],
       "Resource": "*",
       "Condition": {
-        "StringEquals": {"aws:ResourceTag/cloudguard:protected": "true"}
+        "StringEqualsIgnoreCase": {"aws:ResourceTag/cloudguard:protected": "true"}
       }
     }
   ]

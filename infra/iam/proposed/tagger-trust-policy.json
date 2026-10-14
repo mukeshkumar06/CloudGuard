@@ -2,15 +2,21 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "OnlyTheCloudGuardBackendForAnApprovedProposal",
+      "Sid": "OnlyTheCloudGuardBackendWithAProposalSession",
       "Effect": "Allow",
       "Principal": {"AWS": "arn:aws:iam::<ACCOUNT_ID>:role/<CLOUDGUARD_BACKEND_ROLE>"},
-      "Action": ["sts:AssumeRole", "sts:SetSourceIdentity"],
+      "Action": "sts:AssumeRole",
       "Condition": {
-        "StringLike": {
-          "sts:RoleSessionName": "cg-proposal-*",
-          "sts:SourceIdentity": "cloudguard:*"
-        }
+        "StringLike": {"sts:RoleSessionName": "cg-proposal-*"}
+      }
+    },
+    {
+      "Sid": "SourceIdentityMustNameCloudGuard",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::<ACCOUNT_ID>:role/<CLOUDGUARD_BACKEND_ROLE>"},
+      "Action": "sts:SetSourceIdentity",
+      "Condition": {
+        "StringLike": {"sts:SourceIdentity": "cloudguard:*"}
       }
     }
   ]

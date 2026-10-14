@@ -13,6 +13,10 @@ Phase 3 produces proposals but implements **no approval or execution**. This doc
 | `blocking_reasons` | Present exactly when the proposal is `NOT_APPROVABLE`: policy violations, and/or "no tag would change". |
 | `policy` | `{policy_id, version, content_hash}` of the policy the proposal was evaluated against. |
 
+**The hash is an integrity binding, not authentication.** Anyone holding a proposal body can recompute `content_hash`. For example, they could shift `created_at` and `expires_at` forward, and the validators would still pass. Therefore:
+- **Store server-side:** Phase 4 must persist each proposal server-side when it's created, and approve only by `(proposal_id, content_hash)` looked up in that trusted store. It must never accept a client- or model-supplied proposal body.
+- **Use time-aware approvability:** decide approvability with `approvable_at(now)`, which is false once `now >= expires_at` and always false for `NOT_APPROVABLE` proposals. The `approval_status` field records only the state at creation.
+
 **Proposals are immutable.** Later states (APPROVED, REJECTED, EXPIRED, EXECUTING, EXECUTED, FAILED) belong in separate, append-only approval and audit records keyed by `(proposal_id, content_hash)`. They are never written back into the proposal.
 
 **Validators already reject:**
@@ -48,8 +52,8 @@ Phase 4 must also record, outside the proposal:
 
 ## Revalidation immediately before execution
 Approval doesn't make a proposal permanently valid. Immediately before calling any write API, execution must:
-1. **Reload and verify the proposal:** check `content_hash` and `schema_version`, and that `approval_status` was `PENDING`.
-2. **Check the approval:** `now < expires_at`, the approval matches `(proposal_id, content_hash)`, and the nonce hasn't been used yet.
+1. **Reload and verify the proposal from the server-side store:** check `content_hash` and `schema_version`.
+2. **Check the approval:** `approvable_at(now)` is true, the approval matches `(proposal_id, content_hash)`, and the nonce hasn't been used yet.
 3. **Confirm the account:** the authenticated account (`sts:GetCallerIdentity`) equals `account_id`.
 4. **Check the policy:** the active policy still has the same `content_hash`. If it changed, re-propose. Never silently re-evaluate.
 5. **Re-read current tags** for every `CHANGE_PROPOSED` resource, and compare them to `expected_state`. Any drift aborts that resource and reports it as stale, and the user must re-propose:

@@ -50,6 +50,8 @@ Sources: [Lambda](https://docs.aws.amazon.com/service-authorization/latest/refer
 - **`CloudGuardTaggerRole`** holds writes only. It is assumed **only at execution time, for one approved proposal**.
   - **Trust** ([`proposed/tagger-trust-policy.json`](../infra/iam/proposed/tagger-trust-policy.json)): only the CloudGuard backend role may assume it (F7).
   - **Session naming:** the trust policy requires a session name of `cg-proposal-*` and a `SourceIdentity` of `cloudguard:*`. CloudTrail then attributes every write to a proposal.
+  - **Two trust statements:** `sts:AssumeRole` is conditioned on the session name, and `sts:SetSourceIdentity` on the source identity. Keeping them separate avoids relying on `sts:RoleSessionName` being present in the `SetSourceIdentity` request context, which isn't documented.
+  - **The backend's own permissions:** the backend role also needs `sts:AssumeRole` on the tagger role in its identity policy. That isn't part of these documents.
 
 ### 3.2 Permission ceiling on the tagger role
 See [`proposed/tagger-role-policy.json`](../infra/iam/proposed/tagger-role-policy.json).
@@ -62,8 +64,18 @@ See [`proposed/tagger-role-policy.json`](../infra/iam/proposed/tagger-role-polic
 
 **Explicitly denied:**
 - `UntagResource` and `DeleteTags`: CloudGuard never removes tags.
-- Writing **protected keys**: `cloudguard:*`, plus a deployment-supplied list of keys used for ABAC (F8).
-- Any tagging of resources tagged `cloudguard:protected=true`. This deny also covers S3 via `aws:ResourceTag`.
+- Writing **protected keys**: `cloudguard:protected` plus a deployment-supplied list of keys used for ABAC (F8), using `ForAnyValue:StringEqualsIgnoreCase`.
+- Writing `cloudguard:`-prefixed keys, using `StringLike` with the four common spellings (see the case-sensitivity note below).
+- Any tagging of resources tagged `cloudguard:protected=true`, using `StringEqualsIgnoreCase` on the value. This deny also covers S3 via `aws:ResourceTag`.
+
+**Case sensitivity (verified in the IAM docs on 2026-10-14):**
+- *"condition key names are not case-sensitive"*: `aws:ResourceTag/Owner` also matches a tag named `owner`.
+- `StringLike` and `StringEquals` compare *values*, including the key list in `aws:TagKeys`, case-sensitively.
+
+So a deny on `aws:TagKeys` written with `StringLike team*` would miss a request for `TEAM` that someone else's ABAC policy, keyed on `aws:ResourceTag/team`, still honours. The design handles this in three ways:
+- **Exact protected keys** use `StringEqualsIgnoreCase`, which closes the gap for exact keys.
+- **Prefix denies** can't be made case-insensitive, because IAM has no `StringLikeIgnoreCase`. The `cloudguard:` prefix deny lists common spellings only. The **application** rejects `cloudguard:` keys case-insensitively (`validation.RESERVED_PREFIX`), and the session policy only allows exactly approved keys.
+- **ABAC keys** must therefore be listed **exactly** in `<PROTECTED_TAG_KEYS>`, not as prefixes.
 
 **No key allow-list on the role.** Arbitrary *legitimate* custom keys are permitted at the ceiling (F1). The per-approval session policy below does the narrowing.
 
@@ -77,6 +89,7 @@ At execution, the backend calls `sts:AssumeRole` with an **inline session policy
 - **S3:** exact bucket ARNs only. Key and value scoping isn't possible in IAM (F2), so see §3.4.
 - **Credentials:** short-lived, with the minimum 15-minute `DurationSeconds`, and never returned to any model or client.
 - **Size limit:** session policies are capped at 2,048 characters. Large bulk proposals are executed in **chunks**, one session per chunk, and every chunk is still a subset of the same approved proposal.
+- **The session policy is voluntary.** The caller chooses it; the trust policy can't force one. A compromised backend could assume the tagger role *without* a session policy and get the full ceiling of §3.2. The per-approval scoping therefore protects against bugs and over-broad requests, not against a compromised backend. The ceiling and its denies are the actual boundary, so keep them as narrow as practical.
 
 ### 3.4 S3 compensating controls (IAM can't restrict keys)
 1. **Read, merge, write:**
@@ -87,6 +100,7 @@ At execution, the backend calls `sts:AssumeRole` with an **inline session policy
    - Never send a set that drops an existing key: the application asserts `old ⊆ new`.
 2. **Narrow window:** S3 has no conditional or versioned tag write, so a concurrent change between GET and PUT can't be fully prevented. Keep the window minimal, re-read after the write, and report any drift as a failed execution.
 3. **Scope:** exact bucket ARNs via the session policy; the protected-resource deny from §3.2 still applies.
+4. **Residual risk:** `s3:PutBucketTagging` also authorizes `DeleteBucketTagging`, and `PutBucketTagging` overwrites the entire tag set. Both are verified in the S3 API reference. Within its scope, a session can therefore remove every tag from an approved bucket, and the ceiling allows that for any unprotected bucket in the account. IAM can't prevent it: only the application's merge rule and post-write verification can.
 
 ### 3.5 What the application still enforces
 These hold even where IAM can't enforce them:
@@ -98,13 +112,27 @@ These hold even where IAM can't enforce them:
 
 IAM is the second line of defence, not the only one.
 
-## 4. Not yet verified
-- **Untested:** none of these policies has been deployed or simulated (IAM policy simulator / Access Analyzer `ValidatePolicy`).
-- **Assumed behaviour:**
-  - That `ForAllValues:StringEquals aws:TagKeys` plus `aws:RequestTag` in a session policy behaves as described for all three services.
-  - The exact behaviour of `Null ec2:CreateAction` for tagging existing instances.
-- **S3:** whether `s3:ResourceAccount` evaluates as expected for `PutBucketTagging`.
-- **Placeholders:** `<ACCOUNT_ID>`, `<CLOUDGUARD_BACKEND_ROLE>` and `<PROTECTED_TAG_KEY_PATTERNS>` must be filled at deployment. The protected key list must come from the organisation's actual ABAC policies.
+## 4. Verification status
+**Verified from AWS documentation (not by execution):**
+- The condition-key support matrix in §2.
+- `DeleteBucketTagging` requires `s3:PutBucketTagging`, and `PutBucketTagging` overwrites existing tags.
+- Tag-key names in condition keys are case-insensitive, while `StringLike`/`StringEquals` values are case-sensitive.
+- No `StringLikeIgnoreCase` operator exists.
+
+**Syntactically valid JSON only.** Being well-formed doesn't make a policy correct. Each item below still needs **IAM Access Analyzer `ValidatePolicy`** and/or **live testing in a sandbox account**:
+1. None of these policies has been validated by Access Analyzer, simulated with the IAM policy simulator, or deployed.
+2. Session policy plus role intersection: that `ForAllValues:StringEquals aws:TagKeys` plus `StringEquals aws:RequestTag/<key>` restricts Lambda `TagResource`, DynamoDB `TagResource` and EC2 `CreateTags` exactly as described.
+3. That `Null ec2:CreateAction = true` allows tagging existing instances and blocks tag-on-launch.
+4. That `s3:ResourceAccount` evaluates as expected for `GetBucketTagging`/`PutBucketTagging`.
+5. That `ForAnyValue:StringEqualsIgnoreCase` on `aws:TagKeys` denies case variants for all three services.
+6. That `aws:ResourceTag/cloudguard:protected` with `StringEqualsIgnoreCase` matches case variants of both key and value, including for S3.
+7. Trust policy: AssumeRole with session-name and source-identity conditions, split across two statements.
+8. Resource wildcards:
+   - `table/*` also matches DynamoDB stream ARNs (`table/<t>/stream/...`), which `dynamodb:TagResource` supports. The ceiling therefore also permits tagging streams; the session policy's exact ARNs narrow it.
+   - `function:*` also matches qualified ARNs.
+9. That an empty `aws:TagKeys` set under `ForAllValues` (vacuously true) can't be exploited. A `TagResource` call with no tags changes nothing.
+
+**Placeholders:** `<ACCOUNT_ID>`, `<CLOUDGUARD_BACKEND_ROLE>` and `<PROTECTED_TAG_KEYS>` must be filled at deployment. The protected key list must come from the organisation's actual ABAC policies, as exact keys.
 
 ## 5. Phase 4 migration steps (each requires approval)
 1. Add `CloudGuardTaggerRole` (trust plus ceiling policy) to the template, as parameters.

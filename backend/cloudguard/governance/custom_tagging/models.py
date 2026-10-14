@@ -338,7 +338,16 @@ class TaggingProposal(_Frozen):
 
     @property
     def is_approvable(self) -> bool:
+        """Whether the proposal was approvable when created. Use approvable_at() to decide now."""
         return self.approval_status == ApprovalStatus.PENDING
+
+    def approvable_at(self, now: datetime) -> bool:
+        """Approvable at `now`: initially PENDING and not yet expired. Blocked or no-change proposals
+        are never approvable, and nothing can extend expiry because expires_at is hashed.
+        Approval records (Phase 4) still have to be checked separately."""
+        if now.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        return self.is_approvable and now < self.expires_at
 
     def records_with(self, outcome: ResourceOutcome) -> list[ResourceRecord]:
         return [r for r in self.records if r.outcome == outcome]

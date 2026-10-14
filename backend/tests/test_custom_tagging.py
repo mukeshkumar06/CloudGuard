@@ -692,3 +692,70 @@ def test_oversized_requests_are_rejected_before_parsing():
     assert isinstance(RuleBasedParser().parse(ok), TaggingRequest)
     out = prepare("Tag ServiceWRK with A=" + "b" * MAX_REQUEST_CHARS)
     assert out.status == OutcomeStatus.REJECTED and "exceeds" in out.message
+
+
+# =========================================================================== final review regressions
+
+@pytest.mark.parametrize("key", ["cloudguard:protected", "CloudGuard:Protected", "CLOUDGUARD:owner", "cLoUdGuArD:x"])
+def test_reserved_cloudguard_prefix_is_rejected_in_any_case(key):
+    out = prepare(f"Tag ServiceWRK with {key}=true")
+    assert out.status == OutcomeStatus.REJECTED and "reserved 'cloudguard:' prefix" in out.message
+
+
+def test_approvable_at_respects_expiry():
+    p = prepare("Tag ServiceWRK with A=B").proposal
+    assert p.is_approvable
+    assert p.approvable_at(p.created_at) and p.approvable_at(p.expires_at - timedelta(seconds=1))
+    assert not p.approvable_at(p.expires_at) and not p.approvable_at(p.expires_at + timedelta(days=1))
+    with pytest.raises(ValueError, match="timezone-aware"):
+        p.approvable_at(datetime(2026, 10, 14, 6, 31))
+
+
+@pytest.mark.parametrize("text", ["Add Environment=qa to all DynamoDB tables",   # BLOCKED
+                                  "Tag ServiceWRK with Project=CloudGuard"])      # NO_CHANGES
+def test_blocked_and_no_change_proposals_are_never_approvable(text):
+    p = prepare(text).proposal
+    assert not p.is_approvable
+    assert not any(p.approvable_at(p.created_at + timedelta(seconds=s)) for s in (0, 60, 899))
+
+
+def test_forging_a_blocked_proposal_to_pending_is_rejected_even_with_recomputed_hash():
+    p = prepare("Add Environment=qa to all DynamoDB tables").proposal
+    data = p.model_dump(mode="json")
+    data["approval_status"] = "PENDING"
+    data["blocking_reasons"] = []
+    data["content_hash"] = proposal_hash(data)
+    with pytest.raises(ValidationError, match="approvable"):
+        TaggingProposal.model_validate(data)
+
+
+def test_extending_expiry_invalidates_the_hash():
+    p = prepare("Tag ServiceWRK with A=B").proposal
+    data = p.model_dump(mode="json")
+    data["expires_at"] = (p.expires_at + timedelta(minutes=10)).isoformat()
+    with pytest.raises(ValidationError, match="content_hash"):
+        TaggingProposal.model_validate(data)
+
+
+@pytest.mark.parametrize(("text", "rtype"), [
+    ("Tag all Lambda functions with Team=x", "AWS::Lambda::Function"),
+    ("tag all lambda functions in us-east-1 with Team=x", "AWS::Lambda::Function"),
+    ("Tag all S3 buckets with Owner=x", "AWS::S3::Bucket"),
+    ("Update Owner of all Lambda functions in ap-south-1 to x", "AWS::Lambda::Function"),
+])
+def test_every_discovered_resource_of_the_bulk_type_has_exactly_one_record(text, rtype):
+    p = prepare(text).proposal
+    discovered = {r.resource_arn for r in FixtureSource(FIXTURE).discover().resources if r.resource_type == rtype}
+    arns = [r.resource_arn for r in p.records]
+    assert sorted(arns) == sorted(discovered) and len(arns) == len(set(arns))
+    assert sum(len(v) for v in p.impact.resource_arns_by_outcome.values()) == len(discovered)
+
+
+def test_specific_requests_never_produce_more_than_one_record_for_any_fixture_name():
+    names = {r.resource_name for r in FixtureSource(FIXTURE).discover().resources}
+    for name in sorted(names):
+        out = prepare(f"Tag {name} with Team=x")
+        if out.proposal is not None:
+            assert len(out.proposal.records) == 1, name
+        else:
+            assert out.status in (OutcomeStatus.NEEDS_CLARIFICATION, OutcomeStatus.NOT_FOUND), name
