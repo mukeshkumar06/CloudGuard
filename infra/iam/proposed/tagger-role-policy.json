@@ -1,0 +1,74 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "TagLambdaFunctions",
+      "Effect": "Allow",
+      "Action": "lambda:TagResource",
+      "Resource": "arn:aws:lambda:*:<ACCOUNT_ID>:function:*"
+    },
+    {
+      "Sid": "TagDynamoDBTables",
+      "Effect": "Allow",
+      "Action": "dynamodb:TagResource",
+      "Resource": "arn:aws:dynamodb:*:<ACCOUNT_ID>:table/*"
+    },
+    {
+      "Sid": "TagExistingEc2InstancesOnly",
+      "Effect": "Allow",
+      "Action": "ec2:CreateTags",
+      "Resource": "arn:aws:ec2:*:<ACCOUNT_ID>:instance/*",
+      "Condition": {
+        "Null": {"ec2:CreateAction": "true"}
+      }
+    },
+    {
+      "Sid": "S3BucketTagsReadMergeWrite",
+      "Effect": "Allow",
+      "Action": ["s3:GetBucketTagging", "s3:PutBucketTagging"],
+      "Resource": "arn:aws:s3:::*",
+      "Condition": {
+        "StringEquals": {"s3:ResourceAccount": "<ACCOUNT_ID>"}
+      }
+    },
+    {
+      "Sid": "PostWriteVerificationReads",
+      "Effect": "Allow",
+      "Action": ["lambda:ListTags", "dynamodb:ListTagsOfResource"],
+      "Resource": [
+        "arn:aws:lambda:*:<ACCOUNT_ID>:function:*",
+        "arn:aws:dynamodb:*:<ACCOUNT_ID>:table/*"
+      ]
+    },
+    {
+      "Sid": "PostWriteVerificationReadsEc2",
+      "Effect": "Allow",
+      "Action": "ec2:DescribeInstances",
+      "Resource": "*"
+    },
+    {
+      "Sid": "NeverRemoveTags",
+      "Effect": "Deny",
+      "Action": ["lambda:UntagResource", "dynamodb:UntagResource", "ec2:DeleteTags"],
+      "Resource": "*"
+    },
+    {
+      "Sid": "NeverWriteProtectedTagKeys",
+      "Effect": "Deny",
+      "Action": ["lambda:TagResource", "dynamodb:TagResource", "ec2:CreateTags"],
+      "Resource": "*",
+      "Condition": {
+        "ForAnyValue:StringLike": {"aws:TagKeys": ["cloudguard:*", "<PROTECTED_TAG_KEY_PATTERNS>"]}
+      }
+    },
+    {
+      "Sid": "NeverTouchProtectedResources",
+      "Effect": "Deny",
+      "Action": ["lambda:TagResource", "dynamodb:TagResource", "ec2:CreateTags", "s3:PutBucketTagging"],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {"aws:ResourceTag/cloudguard:protected": "true"}
+      }
+    }
+  ]
+}

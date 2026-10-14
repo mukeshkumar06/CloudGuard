@@ -9,7 +9,9 @@ backend/cloudguard/
     discovery/             LiveSource (boto3) | FixtureSource (JSON replay)
       lambda_discovery.py, dynamodb_discovery.py, s3_discovery.py, ec2_discovery.py, common.py
     compliance.py          deterministic evaluate() / summarize() / run_scan()
-    __main__.py            CLI: python -m cloudguard.governance scan --mode fixture|live
+    custom_tagging/        parser (rules + fallback hook), validation, resolver, engine -> read-only proposals
+    report.py              human-readable scan summary
+    __main__.py            CLI: scan | tag | policy
   server/                  (planned) MCP server — never name a package `mcp`, it shadows the SDK
   agents/                  (planned) Strands agents over findings
 backend/fixtures/          governance-demo.json (replay data, fake account 123456789012)

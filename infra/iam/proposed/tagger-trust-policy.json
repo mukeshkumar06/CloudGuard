@@ -1,0 +1,17 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OnlyTheCloudGuardBackendForAnApprovedProposal",
+      "Effect": "Allow",
+      "Principal": {"AWS": "arn:aws:iam::<ACCOUNT_ID>:role/<CLOUDGUARD_BACKEND_ROLE>"},
+      "Action": ["sts:AssumeRole", "sts:SetSourceIdentity"],
+      "Condition": {
+        "StringLike": {
+          "sts:RoleSessionName": "cg-proposal-*",
+          "sts:SourceIdentity": "cloudguard:*"
+        }
+      }
+    }
+  ]
+}

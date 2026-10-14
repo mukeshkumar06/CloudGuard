@@ -1,6 +1,7 @@
 """CLI for resource governance.
 
     python -m cloudguard.governance scan   [--mode fixture|live] [--region R ...] [--policy-version N]
+    python -m cloudguard.governance tag "REQUEST" [--mode fixture|live]   (read-only proposal)
     python -m cloudguard.governance policy validate FILE
     python -m cloudguard.governance policy init|show|history
     python -m cloudguard.governance policy save FILE --expected-version N --author NAME [--note TEXT]
@@ -22,6 +23,8 @@ from pathlib import Path
 import boto3
 
 from cloudguard.governance.compliance import run_scan
+from cloudguard.governance.custom_tagging import CustomTaggingEngine
+from cloudguard.governance.custom_tagging.models import OutcomeStatus
 from cloudguard.governance.report import render_summary
 from cloudguard.governance.discovery import FixtureSource, LiveSource
 from cloudguard.governance.discovery.common import BOTO_CONFIG
@@ -41,6 +44,7 @@ from cloudguard.governance.policy_store import (
 )
 
 DEFAULT_FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "governance-demo.json"
+DEFAULT_TAG_FIXTURE = Path(__file__).resolve().parents[2] / "fixtures" / "custom-tagging-demo.json"
 DEFAULT_POLICY_DIR = Path(".cloudguard") / "policies"
 
 
@@ -67,21 +71,37 @@ def _print(model) -> None:
     print(model.model_dump_json(indent=2))
 
 
-def _cmd_scan(args, parser) -> int:
+def _policy(args):
     manager = _manager(args)
-    if args.policy_version is not None:
-        policy = manager.get_version(args.policy_id, args.policy_version)
-    elif args.table:
-        policy = manager.get_active(args.policy_id)  # never bootstrap remote state implicitly
-    else:
-        policy = manager.ensure_default(policy_id=args.policy_id)
+    if getattr(args, "policy_version", None) is not None:
+        return manager.get_version(args.policy_id, args.policy_version)
+    if args.table:
+        return manager.get_active(args.policy_id)  # never bootstrap remote state implicitly
+    return manager.ensure_default(policy_id=args.policy_id)
+
+
+def _live_source(args, parser) -> LiveSource:
+    session = boto3.Session(profile_name=args.profile)
+    regions = args.regions or ([session.region_name] if session.region_name else [])
+    if not regions:
+        parser.error("no region configured; pass --region")
+    return LiveSource(session, regions)
+
+
+def _cmd_tag(args, parser) -> int:
+    """Read-only: interpret a tagging request and print the proposal. Nothing is written to AWS."""
+    source = _live_source(args, parser) if args.mode == "live" else FixtureSource(args.fixture)
+    outcome = CustomTaggingEngine(source, _policy(args)).prepare(args.request)
+    _print(outcome)
+    return {OutcomeStatus.PROPOSAL_READY: 0, OutcomeStatus.NO_CHANGES: 0, OutcomeStatus.REJECTED: 2,
+            OutcomeStatus.BLOCKED: 3}.get(outcome.status, 1)
+
+
+def _cmd_scan(args, parser) -> int:
+    policy = _policy(args)
 
     if args.mode == "live":
-        session = boto3.Session(profile_name=args.profile)
-        regions = args.regions or ([session.region_name] if session.region_name else [])
-        if not regions:
-            parser.error("no region configured; pass --region")
-        source = LiveSource(session, regions)
+        source = _live_source(args, parser)
         if args.record:
             discovery = source.discover()
             args.record.write_text(discovery.model_dump_json(indent=2), encoding="utf-8")
@@ -142,6 +162,12 @@ def main(argv: list[str] | None = None) -> int:
     scan.add_argument("--output", choices=["json", "summary"], default="json",
                       help="json (full scan) or summary (violations / notices / failures as separate sections)")
 
+    tag = sub.add_parser("tag", parents=[store], help="Interpret a tagging request into a proposal (read-only)")
+    tag.add_argument("request", help='e.g. "Tag Lambda function ServiceWRK with ServiceWRK=Lambda"')
+    tag.add_argument("--mode", choices=["fixture", "live"], default="fixture")
+    tag.add_argument("--fixture", type=Path, default=DEFAULT_TAG_FIXTURE)
+    tag.add_argument("--region", action="append", dest="regions", default=None)
+
     pol = sub.add_parser("policy", help="Manage versioned tagging policies")
     psub = pol.add_subparsers(dest="policy_cmd", required=True)
     v = psub.add_parser("validate", help="Validate a policy JSON file without saving")
@@ -168,7 +194,8 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
 
     try:
-        return _cmd_scan(args, parser) if args.command == "scan" else _cmd_policy(args, parser)
+        commands = {"scan": _cmd_scan, "tag": _cmd_tag, "policy": _cmd_policy}
+        return commands[args.command](args, parser)
     except PolicyValidationError as exc:
         print(json.dumps({"valid": False, "errors": exc.errors}, indent=2), file=sys.stderr)
         return 2

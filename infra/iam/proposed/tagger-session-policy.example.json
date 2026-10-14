@@ -1,0 +1,27 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ExactlyTheApprovedLambdaChanges",
+      "Effect": "Allow",
+      "Action": "lambda:TagResource",
+      "Resource": [
+        "arn:aws:lambda:ap-south-1:123456789012:function:image-resizer",
+        "arn:aws:lambda:ap-south-1:123456789012:function:worker"
+      ],
+      "Condition": {
+        "ForAllValues:StringEquals": {"aws:TagKeys": ["Project"]},
+        "StringEquals": {"aws:RequestTag/Project": "CloudGuard"}
+      }
+    },
+    {
+      "Sid": "VerifyTheSameResources",
+      "Effect": "Allow",
+      "Action": "lambda:ListTags",
+      "Resource": [
+        "arn:aws:lambda:ap-south-1:123456789012:function:image-resizer",
+        "arn:aws:lambda:ap-south-1:123456789012:function:worker"
+      ]
+    }
+  ]
+}

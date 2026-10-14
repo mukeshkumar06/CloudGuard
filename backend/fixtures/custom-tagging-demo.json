@@ -1,0 +1,206 @@
+{
+  "account_id": "123456789012",
+  "regions": [
+    "ap-south-1",
+    "us-east-1"
+  ],
+  "resources": [
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::Lambda::Function",
+      "service": "lambda",
+      "resource_id": "ServiceWRK",
+      "resource_name": "ServiceWRK",
+      "resource_arn": "arn:aws:lambda:ap-south-1:123456789012:function:ServiceWRK",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "Project": "CloudGuard",
+        "Environment": "Development"
+      },
+      "tag_source": "lambda:ListTags",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::Lambda::Function",
+      "service": "lambda",
+      "resource_id": "billing-api",
+      "resource_name": "billing-api",
+      "resource_arn": "arn:aws:lambda:ap-south-1:123456789012:function:billing-api",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "Project": "OtherProject",
+        "Owner": "payments-team"
+      },
+      "tag_source": "lambda:ListTags",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::Lambda::Function",
+      "service": "lambda",
+      "resource_id": "report-worker",
+      "resource_name": "report-worker",
+      "resource_arn": "arn:aws:lambda:ap-south-1:123456789012:function:report-worker",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "Project": "CloudGuard"
+      },
+      "tag_source": "lambda:ListTags",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::Lambda::Function",
+      "service": "lambda",
+      "resource_id": "image-resizer",
+      "resource_name": "image-resizer",
+      "resource_arn": "arn:aws:lambda:ap-south-1:123456789012:function:image-resizer",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {},
+      "tag_source": "lambda:ListTags",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::Lambda::Function",
+      "service": "lambda",
+      "resource_id": "shared-name",
+      "resource_name": "shared-name",
+      "resource_arn": "arn:aws:lambda:ap-south-1:123456789012:function:shared-name",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {},
+      "tag_source": "lambda:ListTags",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::Lambda::Function",
+      "service": "lambda",
+      "resource_id": "worker",
+      "resource_name": "worker",
+      "resource_arn": "arn:aws:lambda:ap-south-1:123456789012:function:worker",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {},
+      "tag_source": "lambda:ListTags",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::Lambda::Function",
+      "service": "lambda",
+      "resource_id": "worker",
+      "resource_name": "worker",
+      "resource_arn": "arn:aws:lambda:us-east-1:123456789012:function:worker",
+      "region": "us-east-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "Owner": "edge-team"
+      },
+      "tag_source": "lambda:ListTags",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::DynamoDB::Table",
+      "service": "dynamodb",
+      "resource_id": "shared-name",
+      "resource_name": "shared-name",
+      "resource_arn": "arn:aws:dynamodb:ap-south-1:123456789012:table/shared-name",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "Owner": "data-team"
+      },
+      "tag_source": "dynamodb:ListTagsOfResource",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::DynamoDB::Table",
+      "service": "dynamodb",
+      "resource_id": "orders",
+      "resource_name": "orders",
+      "resource_arn": "arn:aws:dynamodb:ap-south-1:123456789012:table/orders",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "Environment": "prod",
+        "Project": "checkout"
+      },
+      "tag_source": "dynamodb:ListTagsOfResource",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::DynamoDB::Table",
+      "service": "dynamodb",
+      "resource_id": "sessions",
+      "resource_name": "sessions",
+      "resource_arn": "arn:aws:dynamodb:ap-south-1:123456789012:table/sessions",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "environment": "Staging"
+      },
+      "tag_source": "dynamodb:ListTagsOfResource",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::S3::Bucket",
+      "service": "s3",
+      "resource_id": "acme-logs",
+      "resource_name": "acme-logs",
+      "resource_arn": "arn:aws:s3:::acme-logs",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "project": "legacy"
+      },
+      "tag_source": "s3:GetBucketTagging",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::S3::Bucket",
+      "service": "s3",
+      "resource_id": "acme-locked",
+      "resource_name": "acme-locked",
+      "resource_arn": "arn:aws:s3:::acme-locked",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": null,
+      "tag_source": "s3:GetBucketTagging",
+      "tag_error": {
+        "kind": "ACCESS_DENIED",
+        "code": "AccessDenied",
+        "message": "explicit deny in bucket policy",
+        "operation": "s3:GetBucketTagging"
+      }
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::EC2::Instance",
+      "service": "ec2",
+      "resource_id": "i-0123456789abcdef0",
+      "resource_name": "build-agent",
+      "resource_arn": "arn:aws:ec2:ap-south-1:123456789012:instance/i-0123456789abcdef0",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T06:00:00Z",
+      "tags": {
+        "Name": "build-agent",
+        "Owner": "platform-team"
+      },
+      "tag_source": "ec2:DescribeInstances",
+      "tag_error": null
+    }
+  ],
+  "service_errors": []
+}

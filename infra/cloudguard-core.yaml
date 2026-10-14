@@ -62,6 +62,10 @@ Resources:
                 Resource: !GetAtt ScanTable.Arn
               # Approval-gated remediation: governance tags only. The application also
               # enforces the key allow-list and requires explicit user approval.
+              # KNOWN ISSUES (Phase 3 review): blocks approved custom tags; S3 statement is
+              # unrestricted and can rewrite/wipe bucket tags; read and write share one role.
+              # To be replaced in Phase 4 by a separate tagger role - see docs/phase4-iam-design.md.
+              # Intentionally unchanged until that replacement is approved.
               - Sid: GovernanceTaggingOnly
                 Effect: Allow
                 Action:
