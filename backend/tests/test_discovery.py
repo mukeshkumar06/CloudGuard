@@ -290,3 +290,61 @@ def test_unreachable_service_endpoint_is_service_error():
     c.get_paginator = lambda _name: type("P", (), {"paginate": staticmethod(boom)})()
     resources, errors = discover_ec2(c, REGION, ACCOUNT, "aws", NOW)
     assert resources == [] and errors[0].error.kind == ErrorKind.SERVICE_UNAVAILABLE
+
+
+# ---------- S3 unresolved-region accounting ----------
+
+def test_s3_unresolvable_region_is_reported_as_unresolved_inspection_failure():
+    from cloudguard.governance.models import UNRESOLVED_REGION
+
+    c = client("s3")
+    with Stubber(c) as st:
+        st.add_response("list_buckets", {"Buckets": [{"Name": "mystery"}], "Owner": {"ID": "o"}}, {"BucketRegion": REGION})
+        st.add_client_error("get_bucket_location", "AccessDenied", "denied", 403)
+        resources, _ = discover_s3(c, REGION, ACCOUNT, "aws", NOW)
+        st.assert_no_pending_responses()  # no tag call attempted for an unresolved bucket
+    (r,) = resources
+    assert r.region == UNRESOLVED_REGION
+    assert r.tags is None and r.tag_error.operation == "s3:GetBucketLocation"
+
+
+def test_unresolved_bucket_is_counted_once_in_multi_region_scan():
+    from cloudguard.governance.compliance import run_scan
+    from cloudguard.governance.discovery import LiveSource
+    from cloudguard.governance.models import UNRESOLVED_REGION
+    from cloudguard.governance.policy_store import LocalPolicyStore, PolicyManager
+
+    session = FakeSession()
+    stubbers = []
+    sts = Stubber(session.client("sts", "ap-south-1"))
+    sts.add_response("get_caller_identity", {"Account": ACCOUNT, "Arn": f"arn:aws:iam::{ACCOUNT}:user/u", "UserId": "u"})
+    stubbers.append(sts)
+    for region in ("ap-south-1", "us-east-1"):
+        lam = Stubber(session.client("lambda", region))
+        lam.add_response("list_functions", {"Functions": []})
+        ddb = Stubber(session.client("dynamodb", region))
+        ddb.add_response("list_tables", {"TableNames": []})
+        s3 = Stubber(session.client("s3", region))
+        s3.add_response("list_buckets", {"Buckets": [{"Name": "mystery"}], "Owner": {"ID": "o"}}, {"BucketRegion": region})
+        s3.add_client_error("get_bucket_location", "AccessDenied", "denied", 403)
+        ec2 = Stubber(session.client("ec2", region))
+        ec2.add_response("describe_instances", {"Reservations": []})
+        stubbers += [lam, ddb, s3, ec2]
+    for s in stubbers:
+        s.activate()
+    try:
+        discovery = LiveSource(session, ["ap-south-1", "us-east-1"]).discover()
+    finally:
+        for s in stubbers:
+            s.deactivate()
+
+    assert [(r.resource_name, r.region) for r in discovery.resources] == [("mystery", UNRESOLVED_REGION)]
+
+    class Replay:
+        mode = "live"
+
+        def discover(self):
+            return discovery
+
+    summary = run_scan(Replay(), PolicyManager(LocalPolicyStore()).ensure_default()).summary
+    assert (summary.total_resources, summary.inspection_failed_resources) == (1, 1)

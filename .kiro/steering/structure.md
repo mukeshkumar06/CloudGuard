@@ -4,7 +4,8 @@
 backend/cloudguard/
   governance/              resource governance (tag compliance) — first complete module
     models.py              DiscoveredResource, TagFinding, GovernanceScan, ... (pydantic, frozen)
-    policy.py              TagPolicy (default: Environment, Project, Owner, CostCenter)
+    policy.py              PolicyDocument: defaults + per-type overrides, allowed values, aliases
+    policy_store.py        versioned policies: LocalPolicyStore | DynamoPolicyStore, PolicyManager
     discovery/             LiveSource (boto3) | FixtureSource (JSON replay)
       lambda_discovery.py, dynamodb_discovery.py, s3_discovery.py, ec2_discovery.py, common.py
     compliance.py          deterministic evaluate() / summarize() / run_scan()

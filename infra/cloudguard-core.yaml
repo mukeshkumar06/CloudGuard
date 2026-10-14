@@ -79,22 +79,26 @@ Resources:
                   - s3:PutBucketTagging
                 Resource: "*"
 
-  # Single-table store for scans and findings.
-  #   pk = SCOPE#<account>#<region>   sk = SCAN#<iso-timestamp>
+  # Single-table governance store; key patterns are documented in docs/governance-persistence.md.
+  #   POLICY#<id>  / VERSION#<n> | ACTIVE      (implemented, Phase 2)
+  #   scans, findings, proposals, audit         (planned, Phase 5)
+  # Point-in-time recovery protects append-only audit history from accidental deletes.
   ScanTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: cloudguard-scans
+      TableName: cloudguard-governance
       BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
       AttributeDefinitions:
-        - AttributeName: pk
+        - AttributeName: PK
           AttributeType: S
-        - AttributeName: sk
+        - AttributeName: SK
           AttributeType: S
       KeySchema:
-        - AttributeName: pk
+        - AttributeName: PK
           KeyType: HASH
-        - AttributeName: sk
+        - AttributeName: SK
           KeyType: RANGE
       TimeToLiveSpecification:
         AttributeName: expires_at

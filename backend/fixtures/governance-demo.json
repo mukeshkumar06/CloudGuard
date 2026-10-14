@@ -101,6 +101,42 @@
         "message": "User is not authorized to perform s3:GetBucketTagging (explicit deny in bucket policy)",
         "operation": "s3:GetBucketTagging"
       }
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::Lambda::Function",
+      "service": "lambda",
+      "resource_id": "nightly-etl",
+      "resource_name": "nightly-etl",
+      "resource_arn": "arn:aws:lambda:ap-south-1:123456789012:function:nightly-etl",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T04:30:00Z",
+      "tags": {
+        "Environment": "prod",
+        "Project": "data-pipeline",
+        "Owner": "data-team",
+        "CostCenter": "CC-2001"
+      },
+      "tag_source": "lambda:ListTags",
+      "tag_error": null
+    },
+    {
+      "account_id": "123456789012",
+      "resource_type": "AWS::DynamoDB::Table",
+      "service": "dynamodb",
+      "resource_id": "audit-events",
+      "resource_name": "audit-events",
+      "resource_arn": "arn:aws:dynamodb:ap-south-1:123456789012:table/audit-events",
+      "region": "ap-south-1",
+      "discovered_at": "2026-10-14T04:30:00Z",
+      "tags": {
+        "Environment": "qa",
+        "Project": "compliance",
+        "Owner": "security-team",
+        "CostCenter": "CC-3003"
+      },
+      "tag_source": "dynamodb:ListTagsOfResource",
+      "tag_error": null
     }
   ],
   "service_errors": []

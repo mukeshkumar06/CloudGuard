@@ -29,11 +29,32 @@ The example policy uses `"Resource": "*"` because it's a read-only, account-wide
 ### Failure behaviour
 - **Missing permission on a list call:** the whole service is reported in `service_errors`. Its resources may be absent, and the scan says so instead of hiding it.
 - **Missing permission on a per-resource tag call:** that resource is `INSPECTION_FAILED` with the AWS error code. It is never classed as untagged or non-compliant.
-- **Known limitation:** sometimes `ListBuckets` omits `BucketRegion` *and* `GetBucketLocation` also fails. The bucket's region is then unknown, so it's reported as `INSPECTION_FAILED` in every scanned region. A multi-region scan can count that bucket once per region.
+- **Bucket with an unknown region:** sometimes `ListBuckets` omits `BucketRegion` *and* `GetBucketLocation` also fails. That bucket is then reported once as `INSPECTION_FAILED` with region `unresolved`. Live discovery de-duplicates resources by ARN across regional passes, so a multi-region scan counts it only once.
 - **Not exercised against real AWS:**
   - The `GetBucketLocation` fallback. The live account always returned `BucketRegion`.
   - EC2 discovery, because there were no instances. Both are covered only by stubbed unit tests.
 - **Throttling and 5xx:** botocore retries in standard mode (5 attempts, exponential backoff). If retries run out, the error becomes an inspection or service error.
+
+## Policy store (DynamoDB, single table)
+
+Example policy: [`infra/iam/governance-policy-store-policy.json`](../infra/iam/governance-policy-store-policy.json)
+
+| Operation | IAM action | Notes |
+|---|---|---|
+| Read the active pointer or one version (`GetItem`) | `dynamodb:GetItem` | |
+| List history (`Query`) | `dynamodb:Query` | |
+| Save a version (`TransactWriteItems` with two `Put`s) | `dynamodb:PutItem` | Each `Put` inside a transaction is authorized as `PutItem` |
+
+There is **no `dynamodb:TransactWriteItems` IAM action**. AWS authorizes each transaction entry against its underlying operation:
+- `Put`, `Update`, `Delete` and `Get` entries use `PutItem`, `UpdateItem`, `DeleteItem` and `GetItem`.
+- Only standalone `ConditionCheck` entries need `dynamodb:ConditionCheckItem`. CloudGuard doesn't use them: the condition expressions sit on the `Put`s themselves.
+- Source: [Using IAM with DynamoDB transactions](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/transaction-apis-iam.html), checked on 2026-10-14.
+
+The example limits access to items whose partition key starts with `POLICY#` (via `dynamodb:LeadingKeys`).
+
+**Not yet verified:**
+- The role in `cloudguard-core.yaml` already grants `GetItem`, `PutItem` and `Query` on the table, but neither the role nor this example has been deployed or attached.
+- The `LeadingKeys` condition hasn't been tested against real DynamoDB.
 
 ## Resource governance: approved tagging (planned, Phase 4)
 `lambda:TagResource`, `dynamodb:TagResource`, `s3:PutBucketTagging` (plus `s3:GetBucketTagging` to preserve existing tags), `ec2:CreateTags`. These will live in a separate role that is only assumed after approval.

@@ -11,7 +11,7 @@ import logging
 from datetime import datetime
 
 from cloudguard.governance.discovery.common import AWS_ERRORS, classify_error, error_code
-from cloudguard.governance.models import DiscoveredResource, InspectionError, ServiceError
+from cloudguard.governance.models import UNRESOLVED_REGION, DiscoveredResource, InspectionError, ServiceError
 
 log = logging.getLogger(__name__)
 
@@ -39,11 +39,13 @@ def discover_s3(
                 if not bucket_region:
                     try:
                         bucket_region = _bucket_region(client, name)
+                        if bucket_region != region:
+                            continue  # belongs to another region's scan
                     except AWS_ERRORS as exc:
+                        # Region unknown: report it once as unresolved; LiveSource de-duplicates by
+                        # ARN so a multi-region scan doesn't count it once per region.
                         tag_error = classify_error(exc, "s3:GetBucketLocation")
-                        bucket_region = region
-                    if bucket_region != region:
-                        continue  # belongs to another region's scan
+                        bucket_region = UNRESOLVED_REGION
                 if tag_error is None:
                     try:
                         resp = client.get_bucket_tagging(Bucket=name)

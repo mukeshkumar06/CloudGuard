@@ -11,8 +11,8 @@ import pytest
 
 from cloudguard.governance.compliance import run_scan
 from cloudguard.governance.discovery import SUPPORTED_RESOURCE_TYPES, LiveSource
-from cloudguard.governance.models import ComplianceStatus
-from cloudguard.governance.policy import DEFAULT_POLICY
+from cloudguard.governance.models import UNRESOLVED_REGION, ComplianceStatus
+from cloudguard.governance.policy_store import LocalPolicyStore, PolicyManager
 
 REGION = os.environ.get("CLOUDGUARD_IT_REGION")
 
@@ -39,7 +39,7 @@ def test_discovered_resources_are_well_formed(discovery):
     for r in discovery.resources:
         assert r.resource_type in SUPPORTED_RESOURCE_TYPES
         assert r.resource_arn.startswith("arn:")
-        assert r.region == REGION
+        assert r.region in (REGION, UNRESOLVED_REGION)
         assert (r.tags is None) != (r.tag_error is None)
 
 
@@ -50,7 +50,7 @@ def test_scan_accounts_for_every_discovered_resource(discovery):
         def discover(self):
             return discovery
 
-    scan = run_scan(Replay(), DEFAULT_POLICY)
+    scan = run_scan(Replay(), PolicyManager(LocalPolicyStore()).ensure_default())
     s = scan.summary
     assert s.total_resources == len(discovery.resources)
     assert s.compliant_resources + s.non_compliant_resources + s.inspection_failed_resources == s.total_resources

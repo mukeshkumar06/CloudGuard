@@ -1,0 +1,20 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CloudGuardPolicyStore",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:PutItem",
+        "dynamodb:Query"
+      ],
+      "Resource": "arn:aws:dynamodb:*:*:table/cloudguard-governance",
+      "Condition": {
+        "ForAllValues:StringLike": {
+          "dynamodb:LeadingKeys": ["POLICY#*"]
+        }
+      }
+    }
+  ]
+}

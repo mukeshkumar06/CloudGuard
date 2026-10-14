@@ -12,6 +12,13 @@ from enum import StrEnum
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+SUPPORTED_RESOURCE_TYPES = ("AWS::Lambda::Function", "AWS::DynamoDB::Table", "AWS::S3::Bucket", "AWS::EC2::Instance")
+
+# Region recorded for an S3 bucket whose region AWS would not tell us. Such a bucket is reported
+# once per scan (never once per scanned region).
+UNRESOLVED_REGION = "unresolved"
+
+
 class ErrorKind(StrEnum):
     ACCESS_DENIED = "ACCESS_DENIED"
     THROTTLED = "THROTTLED"
@@ -86,6 +93,34 @@ class InvalidTag(_Frozen):
     actual_key: str  # key as written on the resource
     value: str
     reason: InvalidTagReason
+    mandatory: bool  # False for an optional rule whose present value is invalid
+
+
+class NoticeKind(StrEnum):
+    # Valid, but not the canonical spelling (an alias like "prod", or "production" vs "Production").
+    NON_CANONICAL_VALUE = "NON_CANONICAL_VALUE"
+    # The resource's key differs from the policy key only by case ("environment" vs "Environment").
+    KEY_CASE_MISMATCH = "KEY_CASE_MISMATCH"
+    # The resource has several keys that differ only by case ("Owner" and "owner").
+    DUPLICATE_KEY_CASE = "DUPLICATE_KEY_CASE"
+
+
+class TagNotice(_Frozen):
+    """Advisory observation. Notices never change compliance status and never trigger tag rewrites."""
+
+    kind: NoticeKind
+    key: str  # policy key
+    actual_keys: list[str]
+    value: str | None = None
+    canonical_value: str | None = None
+
+
+class PolicyRef(_Frozen):
+    """The exact policy version a scan was evaluated against."""
+
+    policy_id: str
+    version: int
+    content_hash: str
 
 
 class Evidence(_Frozen):
@@ -95,6 +130,13 @@ class Evidence(_Frozen):
 
 
 class TagFinding(_Frozen):
+    """One resource's result. Three categories are kept strictly apart:
+
+    - violations (`missing_tags`, `invalid_tags`): the only thing that makes a resource NON_COMPLIANT
+    - notices (`notices`): advisory only, never change status
+    - inspection failure (`inspection_error`): tags unknown, so nothing else is reported
+    """
+
     finding_id: str  # stable per resource ARN, so scans can be compared over time
     account_id: str
     resource_type: str
@@ -104,12 +146,35 @@ class TagFinding(_Frozen):
     resource_arn: str
     region: str
     compliance_status: ComplianceStatus
+    required_tags: list[str]  # effective mandatory keys for this resource type under the policy
     existing_tags: dict[str, str] | None
     missing_tags: list[str]
     invalid_tags: list[InvalidTag]
+    notices: list[TagNotice] = Field(default_factory=list)
     evidence: Evidence
     inspection_error: InspectionError | None = None
     scanned_at: datetime
+
+    @property
+    def violation_count(self) -> int:
+        return len(self.missing_tags) + len(self.invalid_tags)
+
+    @model_validator(mode="after")
+    def _categories_are_consistent(self) -> TagFinding:
+        status = self.compliance_status
+        if status == ComplianceStatus.INSPECTION_FAILED:
+            if self.inspection_error is None or self.existing_tags is not None:
+                raise ValueError("INSPECTION_FAILED requires inspection_error and no existing_tags")
+            if self.violation_count or self.notices:
+                raise ValueError("INSPECTION_FAILED findings cannot carry violations or notices")
+        else:
+            if self.inspection_error is not None or self.existing_tags is None:
+                raise ValueError(f"{status} findings require existing_tags and no inspection_error")
+            if status == ComplianceStatus.COMPLIANT and self.violation_count:
+                raise ValueError("COMPLIANT findings cannot carry violations")
+            if status == ComplianceStatus.NON_COMPLIANT and not self.violation_count:
+                raise ValueError("NON_COMPLIANT findings need at least one violation")
+        return self
 
 
 class ScanSummary(_Frozen):
@@ -120,6 +185,9 @@ class ScanSummary(_Frozen):
     # compliant / (compliant + non_compliant) * 100. Inspection failures are excluded from the
     # denominator because their compliance is unknown. None when nothing could be evaluated.
     compliance_percentage: float | None
+    total_violations: int  # missing + invalid tags across all findings
+    total_notices: int  # advisory notices; never affect compliance
+    resources_with_notices: int
     service_errors: int
 
 
@@ -130,7 +198,7 @@ class GovernanceScan(_Frozen):
     mode: str  # "live" or "fixture"
     started_at: datetime
     completed_at: datetime
-    required_tags: list[str]
+    policy: PolicyRef
     summary: ScanSummary
     findings: list[TagFinding]
     service_errors: list[ServiceError]

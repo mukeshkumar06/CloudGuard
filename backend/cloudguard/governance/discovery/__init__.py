@@ -19,11 +19,11 @@ from cloudguard.governance.discovery.dynamodb_discovery import discover_dynamodb
 from cloudguard.governance.discovery.ec2_discovery import discover_ec2
 from cloudguard.governance.discovery.lambda_discovery import discover_lambda
 from cloudguard.governance.discovery.s3_discovery import discover_s3
-from cloudguard.governance.models import DiscoveryResult
+from cloudguard.governance.models import SUPPORTED_RESOURCE_TYPES, DiscoveryResult
 
 log = logging.getLogger(__name__)
 
-SUPPORTED_RESOURCE_TYPES = ["AWS::Lambda::Function", "AWS::DynamoDB::Table", "AWS::S3::Bucket", "AWS::EC2::Instance"]
+__all__ = ["SUPPORTED_RESOURCE_TYPES", "DiscoverySource", "FixtureSource", "LiveSource"]
 
 
 class DiscoverySource(Protocol):
@@ -61,6 +61,17 @@ class LiveSource:
             ):
                 resources.extend(found)
                 errors.extend(errs)
+        # A resource can surface in more than one regional pass (an S3 bucket whose region could
+        # not be resolved). Keep the first occurrence so each resource is counted exactly once.
+        seen: set[str] = set()
+        unique = []
+        for r in resources:
+            if r.resource_arn not in seen:
+                seen.add(r.resource_arn)
+                unique.append(r)
+        if len(unique) != len(resources):
+            log.info("dropped duplicate resources across regions", extra={"duplicates": len(resources) - len(unique)})
+        resources = unique
         log.info("discovery complete", extra={"resources": len(resources), "service_errors": len(errors)})
         return DiscoveryResult(account_id=account_id, regions=self.regions, resources=resources, service_errors=errors)
 

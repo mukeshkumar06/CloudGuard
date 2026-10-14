@@ -30,7 +30,7 @@ Out of scope: multi-account/Organizations, replacing Security Hub/Config, and au
 - Backend: Python 3.14 + uv in `backend/`. Packages: `mcp` 1.x (FastMCP, protocol 2025-11-25), `strands-agents`, boto3, pydantic v2, pytest.
 - Bedrock region: `ap-south-1`. Use Nova Lite for development and Claude (global inference profile) for the demo. The model id is configuration.
 - Frontend (planned): React + Vite + TS in `web/`, MCP TS SDK client, Web Speech API.
-- Infra: CloudFormation in `infra/`. `cloudguard-core.yaml` holds the read-only inspector role, the `cloudguard-scans` table and the budget. `demo-seed.yaml` holds the deliberate misconfigurations.
+- Infra: CloudFormation in `infra/`. `cloudguard-core.yaml` holds the read-only inspector role, the single-table `cloudguard-governance` DynamoDB table (not deployed) and the budget. `demo-seed.yaml` holds the deliberate misconfigurations.
 - Layout and rules are also in `.kiro/steering/`. Keep both in sync.
 - Plan: `C:\Users\mukesh\.claude\plans\immutable-knitting-cascade.md`
 
