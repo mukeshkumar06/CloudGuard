@@ -1,0 +1,98 @@
+{
+  "description": "Bill containing record types CloudGuard does not recognise.",
+  "speech": "For the September 2026 AWS billing month, charges before discounts, credits and refunds were 16.23 US dollars, measured as unblended cost. After discounts of 0.60, CloudGuard calculates a net of 18.88. That's a CloudGuard calculation and may differ from your invoice. Warning: 2 types of billing entries could not be classified. Together they total 3.25. Unclassified amounts are not counted as charges but are included in CloudGuard's net. The top services were Amazon Elastic Compute Cloud - Compute at 12.00 and Amazon Simple Storage Service at 1.75. That's 0.53 more than August, up 3.4 percent.",
+  "report": {
+    "schema_version": "1",
+    "generated_at": "2026-10-15T09:30:00Z",
+    "retrieved_at": "2026-10-15T09:30:01Z",
+    "aws_requests": 1,
+    "cache": null,
+    "status": "OK",
+    "metric": "UnblendedCost",
+    "billing_timezone": "UTC",
+    "period_basis": "AWS billing month (UTC calendar month); end date exclusive",
+    "period_start": "2026-09-01",
+    "period_end_exclusive": "2026-10-01",
+    "currency": "USD",
+    "month": {
+      "start": "2026-09-01",
+      "end_exclusive": "2026-10-01",
+      "estimated": false,
+      "charges_before_discounts_credits_and_refunds": "16.2250000000",
+      "usage": "13.7500000000",
+      "savings_plan_negation": "0",
+      "fees": "0",
+      "tax": "2.4750000000",
+      "discounts": "-0.6000000000",
+      "credits": "0",
+      "refunds": "0",
+      "unclassified": "3.2500000000",
+      "calculated_net": "18.8750000000",
+      "net_basis": "CloudGuard calculation: sum of every UnblendedCost line returned by Cost Explorer; not the AWS invoice amount",
+      "services": [
+        {
+          "service": "Amazon Elastic Compute Cloud - Compute",
+          "amount": "12.0000000000",
+          "tax_only": false
+        },
+        {
+          "service": "Tax",
+          "amount": "2.4750000000",
+          "tax_only": true
+        },
+        {
+          "service": "Amazon Simple Storage Service",
+          "amount": "1.7500000000",
+          "tax_only": false
+        }
+      ],
+      "record_types": [
+        {
+          "record_type": "Bundled discount",
+          "category": "discount",
+          "match_source": "candidate",
+          "amount": "-0.6000000000"
+        },
+        {
+          "record_type": "Marketplace adjustment",
+          "category": "unclassified",
+          "match_source": null,
+          "amount": "3.4000000000"
+        },
+        {
+          "record_type": "Synthetic future type",
+          "category": "unclassified",
+          "match_source": null,
+          "amount": "-0.1500000000"
+        },
+        {
+          "record_type": "Tax",
+          "category": "tax",
+          "match_source": "console_doc",
+          "amount": "2.4750000000"
+        },
+        {
+          "record_type": "Usage",
+          "category": "usage",
+          "match_source": "console_doc",
+          "amount": "13.7500000000"
+        }
+      ],
+      "unclassified_record_types": [
+        "Marketplace adjustment",
+        "Synthetic future type"
+      ]
+    },
+    "comparison": {
+      "previous_start": "2026-08-01",
+      "previous_charges": "15.6940000000",
+      "change": "0.5310000000",
+      "change_percent": "3.4",
+      "estimated": false
+    },
+    "warnings": [
+      "UNCLASSIFIED_RECORD_TYPES"
+    ],
+    "error": null
+  }
+}

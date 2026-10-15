@@ -1,0 +1,94 @@
+{
+  "description": "Bill fully covered by promotional credits, with one refund; still estimated by AWS.",
+  "speech": "For the September 2026 AWS billing month, charges before discounts, credits and refunds were 13.06 US dollars, measured as unblended cost. After credits of 13.06 and refunds of 0.50, CloudGuard calculates a net of -0.50. That's a CloudGuard calculation and may differ from your invoice. The top services were Amazon Elastic Compute Cloud - Compute at 9.40, Amazon Simple Storage Service at 1.25 and Amazon DynamoDB at 0.42. That's 2.63 less than August, down 16.8 percent. AWS still marks these figures as estimated, so they may change.",
+  "report": {
+    "schema_version": "1",
+    "generated_at": "2026-10-15T09:30:00Z",
+    "retrieved_at": "2026-10-15T09:30:01Z",
+    "aws_requests": 1,
+    "cache": null,
+    "status": "OK",
+    "metric": "UnblendedCost",
+    "billing_timezone": "UTC",
+    "period_basis": "AWS billing month (UTC calendar month); end date exclusive",
+    "period_start": "2026-09-01",
+    "period_end_exclusive": "2026-10-01",
+    "currency": "USD",
+    "month": {
+      "start": "2026-09-01",
+      "end_exclusive": "2026-10-01",
+      "estimated": true,
+      "charges_before_discounts_credits_and_refunds": "13.0626000000",
+      "usage": "11.0700000000",
+      "savings_plan_negation": "0",
+      "fees": "0",
+      "tax": "1.9926000000",
+      "discounts": "0",
+      "credits": "-13.0626000000",
+      "refunds": "-0.5000000000",
+      "unclassified": "0",
+      "calculated_net": "-0.5000000000",
+      "net_basis": "CloudGuard calculation: sum of every UnblendedCost line returned by Cost Explorer; not the AWS invoice amount",
+      "services": [
+        {
+          "service": "Amazon Elastic Compute Cloud - Compute",
+          "amount": "9.4000000000",
+          "tax_only": false
+        },
+        {
+          "service": "Tax",
+          "amount": "1.9926000000",
+          "tax_only": true
+        },
+        {
+          "service": "Amazon Simple Storage Service",
+          "amount": "1.2500000000",
+          "tax_only": false
+        },
+        {
+          "service": "Amazon DynamoDB",
+          "amount": "0.4200000000",
+          "tax_only": false
+        }
+      ],
+      "record_types": [
+        {
+          "record_type": "Credit",
+          "category": "credit",
+          "match_source": "console_doc",
+          "amount": "-13.0626000000"
+        },
+        {
+          "record_type": "Refund",
+          "category": "refund",
+          "match_source": "console_doc",
+          "amount": "-0.5000000000"
+        },
+        {
+          "record_type": "Tax",
+          "category": "tax",
+          "match_source": "console_doc",
+          "amount": "1.9926000000"
+        },
+        {
+          "record_type": "Usage",
+          "category": "usage",
+          "match_source": "console_doc",
+          "amount": "11.0700000000"
+        }
+      ],
+      "unclassified_record_types": []
+    },
+    "comparison": {
+      "previous_start": "2026-08-01",
+      "previous_charges": "15.6940000000",
+      "change": "-2.6314000000",
+      "change_percent": "-16.8",
+      "estimated": true
+    },
+    "warnings": [
+      "ESTIMATED"
+    ],
+    "error": null
+  }
+}

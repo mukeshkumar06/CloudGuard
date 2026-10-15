@@ -1,0 +1,30 @@
+{
+  "description": "Bill request rejected because the identity lacks ce:GetCostAndUsage.",
+  "speech": "I don't have permission to read billing data from AWS Cost Explorer.",
+  "report": {
+    "schema_version": "1",
+    "generated_at": "2026-10-15T09:30:00Z",
+    "retrieved_at": null,
+    "aws_requests": 1,
+    "cache": null,
+    "status": "ACCESS_DENIED",
+    "metric": "UnblendedCost",
+    "billing_timezone": "UTC",
+    "period_basis": "AWS billing month (UTC calendar month); end date exclusive",
+    "period_start": "2026-09-01",
+    "period_end_exclusive": "2026-10-01",
+    "currency": null,
+    "month": null,
+    "comparison": null,
+    "warnings": [],
+    "error": {
+      "code": "AccessDeniedException",
+      "operation": "ce:GetCostAndUsage",
+      "aws_description": null,
+      "inferred_possible_causes": [
+        "the identity may lack the required ce: permission",
+        "IAM access to billing information may not be activated for this account"
+      ]
+    }
+  }
+}

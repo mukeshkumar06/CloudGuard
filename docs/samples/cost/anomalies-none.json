@@ -1,0 +1,23 @@
+{
+  "description": "Monitor evaluated recently; AWS returned no anomalies for the window.",
+  "speech": "AWS Cost Anomaly Detection reported no anomalies between October 8 and October 15. That doesn't guarantee spending is normal: detection covers only what your monitors watch, and it isn't real-time. AWS last evaluated your costs on October 14.",
+  "report": {
+    "schema_version": "1",
+    "generated_at": "2026-10-15T09:30:00Z",
+    "retrieved_at": "2026-10-15T09:30:01Z",
+    "aws_requests": 2,
+    "cache": null,
+    "status": "NO_ANOMALIES",
+    "window_start": "2026-10-08",
+    "window_end": "2026-10-15",
+    "currency": "USD",
+    "currency_basis": "documented_not_returned: the Cost Anomaly Detection API returns impact amounts without a currency field; AWS's Impact documentation describes them as dollar values",
+    "currency_reference": "https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_Impact.html",
+    "monitor_count": 1,
+    "last_evaluated": "2026-10-14",
+    "stale": false,
+    "anomalies": [],
+    "warnings": [],
+    "error": null
+  }
+}

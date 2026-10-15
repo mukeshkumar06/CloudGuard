@@ -58,3 +58,6 @@ The example limits access to items whose partition key starts with `POLICY#` (vi
 
 ## Resource governance: approved tagging (planned, Phase 4)
 `lambda:TagResource`, `dynamodb:TagResource`, `s3:PutBucketTagging` (plus `s3:GetBucketTagging` to preserve existing tags), `ec2:CreateTags`. These will live in a separate role that is only assumed after approval.
+
+## Cost intelligence (Task 1, read-only)
+Example policy: [`infra/iam/cost-intelligence-policy.json`](../infra/iam/cost-intelligence-policy.json): `ce:GetCostAndUsage`, `ce:GetAnomalyMonitors` and `ce:GetAnomalies`. The details, the pre-flight checklist and the open verification items are in [cost-intelligence.md](cost-intelligence.md). **Not yet attached or tested against AWS.**

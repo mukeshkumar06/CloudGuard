@@ -12,6 +12,10 @@ backend/cloudguard/
     custom_tagging/        parser (rules + fallback hook), validation, resolver, engine -> read-only proposals
     report.py              human-readable scan summary
     __main__.py            CLI: scan | tag | policy
+  cost/                    Task 1 cost intelligence (read-only, deterministic, no LLM): periods, models,
+                           ce (client in us-east-1, capped pagination), record_types (explicit RECORD_TYPE table), bill (UTC billing month,
+                           UnblendedCost, reconciled categories),
+                           anomalies (monitors first, then findings), voice (spoken summaries). No CLI/MCP yet.
   server/                  (planned) MCP server — never name a package `mcp`, it shadows the SDK
   agents/                  (planned) Strands agents over findings
 backend/fixtures/          governance-demo.json (replay data, fake account 123456789012)

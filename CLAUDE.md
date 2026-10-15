@@ -43,6 +43,8 @@ Out of scope: multi-account/Organizations, replacing Security Hub/Config, and au
 - Tagging proposal (read-only): `python -m cloudguard.governance tag "Tag all Lambda functions with Project=X"`
 - On this machine, uv installed from inside Claude is sandbox-redirected. If `uv` isn't on PATH, use `.venv\Scripts\python.exe` directly.
 
+- Cost intelligence (Task 1, current priority): `backend/cloudguard/cost/`, see `docs/cost-intelligence.md`. Bedrock/Strands are postponed for Task 1.
+
 ## Restrictions
 
 <!-- TODO: add project-specific restrictions here -->

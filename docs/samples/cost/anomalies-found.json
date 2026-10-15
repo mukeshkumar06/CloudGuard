@@ -1,0 +1,50 @@
+{
+  "description": "Two anomalies: one ongoing, one closed with zero expected spend.",
+  "speech": "AWS Cost Anomaly Detection reported 2 anomalies between October 8 and October 15. The largest: Amazon Simple Storage Service cost 7.20 USD against an expected 0.80 USD, 6.40 USD above the baseline (800.0% higher). AWS still reports it as ongoing. AWS last evaluated your costs on October 14.",
+  "report": {
+    "schema_version": "1",
+    "generated_at": "2026-10-15T09:30:00Z",
+    "retrieved_at": "2026-10-15T09:30:01Z",
+    "aws_requests": 2,
+    "cache": null,
+    "status": "ANOMALIES_FOUND",
+    "window_start": "2026-10-08",
+    "window_end": "2026-10-15",
+    "currency": "USD",
+    "currency_basis": "documented_not_returned: the Cost Anomaly Detection API returns impact amounts without a currency field; AWS's Impact documentation describes them as dollar values",
+    "currency_reference": "https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_Impact.html",
+    "monitor_count": 1,
+    "last_evaluated": "2026-10-14",
+    "stale": false,
+    "anomalies": [
+      {
+        "service": "Amazon Simple Storage Service",
+        "region": "ap-south-1",
+        "usage_type": "APS3-Requests-Tier1",
+        "start_date": "2026-10-11",
+        "end_date": null,
+        "expected_spend": "0.8",
+        "actual_spend": "7.2",
+        "impact": "6.4",
+        "impact_percent": "800.0",
+        "score": "0.91",
+        "explanation": "Amazon Simple Storage Service cost 7.20 USD against an expected 0.80 USD, 6.40 USD above the baseline (800.0% higher). AWS still reports it as ongoing."
+      },
+      {
+        "service": "Amazon Bedrock",
+        "region": "ap-south-1",
+        "usage_type": "APS3-input-tokens",
+        "start_date": "2026-10-09",
+        "end_date": "2026-10-10",
+        "expected_spend": "0.0",
+        "actual_spend": "2.0",
+        "impact": "2.0",
+        "impact_percent": null,
+        "score": "0.74",
+        "explanation": "Amazon Bedrock cost 2.00 USD against an expected 0.00 USD, 2.00 USD above the baseline (AWS gives no percentage because expected spend was zero)."
+      }
+    ],
+    "warnings": [],
+    "error": null
+  }
+}

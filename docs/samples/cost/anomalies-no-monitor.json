@@ -1,0 +1,23 @@
+{
+  "description": "No Cost Anomaly Detection monitor is configured.",
+  "speech": "No Cost Anomaly Detection monitor is set up, so AWS isn't checking this account for anomalies.",
+  "report": {
+    "schema_version": "1",
+    "generated_at": "2026-10-15T09:30:00Z",
+    "retrieved_at": "2026-10-15T09:30:01Z",
+    "aws_requests": 1,
+    "cache": null,
+    "status": "NO_MONITOR",
+    "window_start": "2026-10-08",
+    "window_end": "2026-10-15",
+    "currency": "USD",
+    "currency_basis": "documented_not_returned: the Cost Anomaly Detection API returns impact amounts without a currency field; AWS's Impact documentation describes them as dollar values",
+    "currency_reference": "https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_Impact.html",
+    "monitor_count": 0,
+    "last_evaluated": null,
+    "stale": false,
+    "anomalies": [],
+    "warnings": [],
+    "error": null
+  }
+}

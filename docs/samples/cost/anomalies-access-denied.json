@@ -1,0 +1,31 @@
+{
+  "description": "Anomaly request rejected because the identity lacks ce:GetAnomalyMonitors.",
+  "speech": "I don't have permission to read AWS Cost Anomaly Detection results.",
+  "report": {
+    "schema_version": "1",
+    "generated_at": "2026-10-15T09:30:00Z",
+    "retrieved_at": null,
+    "aws_requests": 1,
+    "cache": null,
+    "status": "ACCESS_DENIED",
+    "window_start": "2026-10-08",
+    "window_end": "2026-10-15",
+    "currency": "USD",
+    "currency_basis": "documented_not_returned: the Cost Anomaly Detection API returns impact amounts without a currency field; AWS's Impact documentation describes them as dollar values",
+    "currency_reference": "https://docs.aws.amazon.com/aws-cost-management/latest/APIReference/API_Impact.html",
+    "monitor_count": 0,
+    "last_evaluated": null,
+    "stale": false,
+    "anomalies": [],
+    "warnings": [],
+    "error": {
+      "code": "AccessDeniedException",
+      "operation": "ce:GetAnomalyMonitors",
+      "aws_description": null,
+      "inferred_possible_causes": [
+        "the identity may lack the required ce: permission",
+        "IAM access to billing information may not be activated for this account"
+      ]
+    }
+  }
+}

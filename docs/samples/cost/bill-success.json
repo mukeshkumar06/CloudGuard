@@ -1,0 +1,114 @@
+{
+  "description": "Successful bill: usage, a Savings Plan pair, a support fee and tax; no credits.",
+  "speech": "For the September 2026 AWS billing month, charges before discounts, credits and refunds were 57.30 US dollars, measured as unblended cost. The top services were AWS Support (Developer) at 29.00, Amazon Elastic Compute Cloud - Compute at 14.62 and Amazon Simple Storage Service at 2.48. That's 41.60 more than August, up 265.1 percent.",
+  "report": {
+    "schema_version": "1",
+    "generated_at": "2026-10-15T09:30:00Z",
+    "retrieved_at": "2026-10-15T09:30:01Z",
+    "aws_requests": 1,
+    "cache": null,
+    "status": "OK",
+    "metric": "UnblendedCost",
+    "billing_timezone": "UTC",
+    "period_basis": "AWS billing month (UTC calendar month); end date exclusive",
+    "period_start": "2026-09-01",
+    "period_end_exclusive": "2026-10-01",
+    "currency": "USD",
+    "month": {
+      "start": "2026-09-01",
+      "end_exclusive": "2026-10-01",
+      "estimated": false,
+      "charges_before_discounts_credits_and_refunds": "57.2976000000",
+      "usage": "20.4100000000",
+      "savings_plan_negation": "-3.0000000000",
+      "fees": "31.1900000000",
+      "tax": "8.6976000000",
+      "discounts": "0",
+      "credits": "0",
+      "refunds": "0",
+      "unclassified": "0",
+      "calculated_net": "57.2976000000",
+      "net_basis": "CloudGuard calculation: sum of every UnblendedCost line returned by Cost Explorer; not the AWS invoice amount",
+      "services": [
+        {
+          "service": "AWS Support (Developer)",
+          "amount": "29.0000000000",
+          "tax_only": false
+        },
+        {
+          "service": "Amazon Elastic Compute Cloud - Compute",
+          "amount": "14.6200000000",
+          "tax_only": false
+        },
+        {
+          "service": "Tax",
+          "amount": "8.6976000000",
+          "tax_only": true
+        },
+        {
+          "service": "Amazon Simple Storage Service",
+          "amount": "2.4800000000",
+          "tax_only": false
+        },
+        {
+          "service": "Savings Plans for AWS Compute usage",
+          "amount": "2.1900000000",
+          "tax_only": false
+        },
+        {
+          "service": "AWS Lambda",
+          "amount": "0.3100000000",
+          "tax_only": false
+        }
+      ],
+      "record_types": [
+        {
+          "record_type": "Savings Plan covered usage",
+          "category": "usage",
+          "match_source": "console_doc",
+          "amount": "3.0000000000"
+        },
+        {
+          "record_type": "Savings Plan negation",
+          "category": "savings_plan_negation",
+          "match_source": "console_doc",
+          "amount": "-3.0000000000"
+        },
+        {
+          "record_type": "Savings Plan recurring fee",
+          "category": "fee",
+          "match_source": "console_doc",
+          "amount": "2.1900000000"
+        },
+        {
+          "record_type": "Support fee",
+          "category": "fee",
+          "match_source": "console_doc",
+          "amount": "29.0000000000"
+        },
+        {
+          "record_type": "Tax",
+          "category": "tax",
+          "match_source": "console_doc",
+          "amount": "8.6976000000"
+        },
+        {
+          "record_type": "Usage",
+          "category": "usage",
+          "match_source": "console_doc",
+          "amount": "17.4100000000"
+        }
+      ],
+      "unclassified_record_types": []
+    },
+    "comparison": {
+      "previous_start": "2026-08-01",
+      "previous_charges": "15.6940000000",
+      "change": "41.6036000000",
+      "change_percent": "265.1",
+      "estimated": false
+    },
+    "warnings": [],
+    "error": null
+  }
+}
