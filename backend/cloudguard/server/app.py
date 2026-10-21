@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -18,15 +19,37 @@ INSTRUCTIONS = (
     "`report` for evidence. An outcome of 'unavailable' means no figures, not zero spend."
 )
 
+# HTTP front ends that authenticate callers put the caller here in the ASGI scope (see cloudguard.deploy).
+PRINCIPAL_SCOPE_KEY = "cloudguard.principal"
+
+# (principal or None, tool name) -> allowed. None principal means the request carried no authenticated caller.
+ToolAuthorizer = Callable[[Any, str], bool]
+
 
 class CloudGuardMCP(FastMCP):
     """FastMCP that rejects unknown tool arguments instead of silently ignoring them.
 
     FastMCP's argument models ignore extra keys, so an argument such as `account_id` or `role_arn` would be
     dropped without notice. Rejecting it makes the account-context rule visible to clients.
+
+    With an `authorizer`, every tool call is first checked against the authenticated caller that the HTTP
+    front end stored in the request scope, before any argument handling or tool code (so before any AWS
+    call). A call with no authenticated caller is refused. Without one (stdio, local HTTP) nothing changes.
     """
 
+    authorizer: ToolAuthorizer | None = None
+
+    def _principal(self) -> Any:
+        try:
+            request = self.get_context().request_context.request
+        except (LookupError, ValueError):
+            return None
+        scope = getattr(request, "scope", None)
+        return scope.get(PRINCIPAL_SCOPE_KEY) if isinstance(scope, dict) else None
+
     async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        if self.authorizer is not None and not self.authorizer(self._principal(), name):
+            raise ToolError(f"not authorized to call {name[:64]}")
         tool = self._tool_manager.get_tool(name)
         if tool is not None:
             unknown = sorted(set(arguments or {}) - set(tool.parameters.get("properties", {})))
@@ -36,9 +59,10 @@ class CloudGuardMCP(FastMCP):
         return await super().call_tool(name, arguments)
 
 
-def create_server(cost: CostContext, *, port: int = 8000) -> CloudGuardMCP:
+def create_server(cost: CostContext, *, port: int = 8000, authorizer: ToolAuthorizer | None = None) -> CloudGuardMCP:
     server = CloudGuardMCP(name="cloudguard-ai", instructions=INSTRUCTIONS, host="127.0.0.1", port=port,
                            stateless_http=True, json_response=True)
+    server.authorizer = authorizer
     register_cost_tools(server, cost)
     for tool in server._tool_manager.list_tools():
         tool.parameters["additionalProperties"] = False  # advertise the strictness enforced in call_tool

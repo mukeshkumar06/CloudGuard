@@ -1,0 +1,10 @@
+# Build context is backend/. Send only what the prototype image copies; never local secrets or state.
+*
+!cloudguard/**
+!fixtures/**
+!deploy/lambda/requirements.txt
+**/__pycache__
+**/*.pyc
+**/.env
+**/.env.*
+**/.cloudguard
