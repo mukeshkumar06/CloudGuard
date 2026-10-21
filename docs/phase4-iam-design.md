@@ -1,10 +1,12 @@
 # Phase 4 IAM design: approved tagging (proposed, not deployed)
 
-Status: **design only.** Nothing here is deployed or attached. `infra/cloudguard-core.yaml` is unchanged apart from a comment pointing here. Its replacement is Phase 4 work and needs explicit approval.
+Status: **nothing here is deployed or attached.**
+- **The tagger role** remains a design (`infra/iam/proposed/`).
+- **The inspector-role changes from §1** were applied to `infra/cloudguard-core.yaml` by H2 (§7), as a template change only.
 
-## 1. Current template: findings
+## 1. Template findings before H2 (historical)
 
-`CloudGuardInspectorRole` in `infra/cloudguard-core.yaml` currently grants:
+**Fixed in the template by H2; see §7.** Before H2, `CloudGuardInspectorRole` in `infra/cloudguard-core.yaml` granted:
 
 ```yaml
 - Sid: GovernanceTaggingOnly
@@ -135,7 +137,53 @@ IAM is the second line of defence, not the only one.
 **Placeholders:** `<ACCOUNT_ID>`, `<CLOUDGUARD_BACKEND_ROLE>` and `<PROTECTED_TAG_KEYS>` must be filled at deployment. The protected key list must come from the organisation's actual ABAC policies, as exact keys.
 
 ## 5. Phase 4 migration steps (each requires approval)
-1. Add `CloudGuardTaggerRole` (trust plus ceiling policy) to the template, as parameters.
-2. Remove `GovernanceTaggingOnly`, `S3BucketTagging` and `tag:TagResources` from the inspector role.
+1. Add `CloudGuardTaggerRole` (trust plus ceiling policy) to the template, as parameters. *Deferred: no live writer exists.*
+2. Remove `GovernanceTaggingOnly`, `S3BucketTagging` and `tag:TagResources` from the inspector role. **Done in the template by H2 (§7); not deployed.**
 3. Implement session-policy generation from `TaggingProposal.approval_binding()`, with tests for size and chunking.
 4. Validate the policies with IAM Access Analyzer before any deployment.
+
+## 6. Status after Checkpoint 4.3 (fixture execution)
+- **No IAM role was used or needed.** The 4.3 executor writes only to the in-memory `FixtureAccount`. No tagger role, session policy or AWS tagging API is involved, so **none of the assumptions in §4 has been tested by 4.3**.
+- **The executor's request model matches this design:** proposal ID plus approval ID only, with the stored proposal as the sole source of intent. A future live executor would derive the session policy's exact ARNs, keys and values from the same stored proposal, never from the request.
+- **Table permissions:** execution persistence needs only `PutItem`, `UpdateItem`, `GetItem` and `Query` on the governance table, which is unchanged from Checkpoint 4.1. Lease fencing uses a conditional `Update`, not `ConditionCheck`, so `dynamodb:ConditionCheckItem` is still not required.
+- **Before any live writer:** complete steps 1–4 above, run Access Analyzer and sandbox tests for every §4 item, and get explicit approval. See "Why this does not authorize live remediation" in [approval-readiness.md](approval-readiness.md).
+
+## 7. H2: privilege boundary in the template (not deployed)
+`infra/cloudguard-core.yaml` now separates inspection from governance persistence. The exact statements and the call-site mapping are in [aws-permissions.md](aws-permissions.md) § "Governance store identities (H2)".
+
+**`CloudGuardInspectorRole` (read-only)**
+- **Trust:** only the exact principal ARNs in the required parameter `InspectorTrustedPrincipalArns`. Its `AllowedPattern` rejects `*`, wildcards and `:root`. A `StringEquals aws:PrincipalAccount = <this account>` condition is added. This fixes F7 for the inspector.
+- **Grants:** the discovery reads, `SecurityAudit` + `ViewOnlyAccess`, and the Bedrock invoke actions.
+- **No governance-table access at all.** The old `ScanHistory` grant (`PutItem`/`UpdateItem`/`BatchWriteItem`) is gone, and nothing uses scan history yet.
+- **Explicit unconditional Deny on tag mutations:** `lambda`/`dynamodb` `TagResource`/`UntagResource`, `ec2:CreateTags`/`DeleteTags`, `s3:PutBucketTagging` (which also authorizes `DeleteBucketTagging`), and `tag:TagResources`/`UntagResources`. That covers CloudGuard's four resource types and the Tagging API, not every AWS tagging API.
+- **Explicit unconditional Deny on governance-table mutations:** `Put`/`Update`/`Delete`/`BatchWrite`/PartiQL. This fixes F4 and F6, and removes the unrestricted S3 tagging grant (F2/F3) from the inspector.
+
+**`CloudGuardGovernanceParticipant` (managed policy, unattached)**
+- Allow-only, table ARN only (there are no indexes). Every statement uses `ForAllValues:StringLike dynamodb:LeadingKeys` plus `Null LeadingKeys = false`.
+- **P1:** transactional (`StringEquals dynamodb:EnclosingOperation = TransactWriteItems`) `PutItem`/`UpdateItem` on `PROPOSAL#*`, `IDEMP#*`, `NONCE#*`.
+- **P2:** plain (`Null EnclosingOperation = true`) `PutItem`/`UpdateItem` on `PROPOSAL#*` only. Used by `repair_head` and `take_over_lease`.
+- **P3:** `GetItem` on all five prefixes.
+- **P4:** `Query` on `PROPOSAL#*`.
+- **Never** writes `AUTHZ#` or `POLICY#`.
+
+**`CloudGuardGovernanceAdmin` (managed policy, unattached)**
+- **A1:** transactional `PutItem` only, on `AUTHZ#*`, `POLICY#*`. There is no `UpdateItem`: both stores commit with two `Put`s.
+- **A2:** `GetItem`/`Query` on `AUTHZ#*`, `POLICY#*`.
+- No tagging, and no proposal records.
+
+**Granted to nobody:** `DeleteItem`, `BatchWriteItem`, `Scan`, PartiQL and `ConditionCheckItem`, because no call site uses them.
+
+**What H2 does not do (known limitations; details in aws-permissions.md)**
+- **Participants aren't bound to their own proposals.** They may write **any** `PROPOSAL#`, `IDEMP#` or `NONCE#` partition and any sort key in it. Idempotency and nonce keys are shared namespaces with no principal component, so one participant can overwrite another's records.
+- **TTL deletion is closed by disabling TTL on the governance table (Option D).** Before that, participants (and administrators) could set `ttl_epoch` to make DynamoDB delete records, including every `AUTHZ#` item, reopening the bootstrap. **Re-enabling TTL reopens that vulnerability.** No policy grants `dynamodb:UpdateTimeToLive`.
+- **Overwrite and forgery remain possible.** Through direct table access, any participant can replace any `PROPOSAL#`/`IDEMP#`/`NONCE#` item, and any administrator any `AUTHZ#`/`POLICY#` item, because IAM can't require write conditions.
+- **IAM does not enforce the approval workflow** against direct table access. That needs governance writes mediated by a server (Phase 7) or signed records.
+- **Human separation of duties isn't enforced by these managed policies.** It depends on how the account's IAM administrators attach them, and on M3 (per-human identity).
+
+**Deployment blockers (not verified by offline tests)**
+- IAM Access Analyzer `ValidatePolicy` on every statement.
+- A sandbox test that `dynamodb:LeadingKeys` and `dynamodb:EnclosingOperation` behave as described inside `TransactWriteItems`.
+- `aws:PrincipalAccount` in the trust policy.
+- CloudFormation `AllowedPattern` on `CommaDelimitedList`.
+- An actual stack validation (`cfn-lint` / `validate-template`).
+- `backend/tests/test_iam_boundaries.py` checks structure only.

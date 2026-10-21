@@ -98,9 +98,11 @@ def test_session_policy_example_binds_exact_resources_keys_and_values():
     assert len(json.dumps(load("tagger-session-policy.example.json"), separators=(",", ":"))) <= 2048
 
 
-def test_current_template_restriction_is_documented_not_removed():
-    assert "Sid: GovernanceTaggingOnly" in TEMPLATE and "aws:TagKeys: [Owner, Project, Environment, CostCenter]" in TEMPLATE
-    assert "KNOWN ISSUES (Phase 3 review)" in TEMPLATE and "docs/phase4-iam-design.md" in TEMPLATE
+def test_legacy_inspector_tagging_statements_were_removed_by_h2():
+    """The Phase 3 guard kept these until the replacement was approved; H2 removed them."""
+    for gone in ("Sid: GovernanceTaggingOnly", "Sid: S3BucketTagging", "Sid: ScanHistory", "KNOWN ISSUES (Phase 3 review)"):
+        assert gone not in TEMPLATE
+    assert "Sid: InspectorNeverTagsSupportedResources" in TEMPLATE and "docs/phase4-iam-design.md" in TEMPLATE
 
 
 def test_design_doc_covers_findings_and_verified_condition_keys():

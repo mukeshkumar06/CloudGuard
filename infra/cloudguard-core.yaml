@@ -1,7 +1,9 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  CloudGuard AI core: read-only inspector role, scan-history table, and a cost budget alert.
-  Deploy once per account/region.
+  CloudGuard AI core: read-only inspector role, the cloudguard-governance table, two unattached
+  governance-store managed policies (participant, admin) and an optional cost budget alert.
+  Deploy once per account/region. NOT DEPLOYED: validate with IAM Access Analyzer and a sandbox
+  account first (see docs/phase4-iam-design.md section 7).
 
 Parameters:
   AlertEmail:
@@ -14,34 +16,62 @@ Parameters:
     Type: Number
     Default: 20
     Description: Monthly cost budget (USD) for the whole account; alerts at 50%, 80% and forecast 100%.
+  InspectorTrustedPrincipalArns:
+    Type: CommaDelimitedList
+    # Exact IAM role/user ARNs only: no wildcards, no account root. The same pattern holds whether
+    # CloudFormation applies it to each list item or to the whole comma-separated string (which of
+    # the two it does is not yet verified).
+    AllowedPattern: '^arn:aws(-cn|-us-gov)?:iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]+(,arn:aws(-cn|-us-gov)?:iam::[0-9]{12}:(role|user)/[A-Za-z0-9+=,.@_/-]+)*$'
+    ConstraintDescription: comma-separated exact IAM role or user ARNs (no wildcards, no account root)
+    Description: >
+      Exact IAM role/user ARNs (in this account) allowed to assume CloudGuardInspectorRole.
+      Required; there is no default.
 
 Conditions:
   CreateBudget: !Not [!Equals [!Ref AlertEmail, ""]]
 
 Resources:
-  # Role the CloudGuard backend assumes. Read-only by design; the only writes are
-  # scan-history persistence, Bedrock invocation, and approval-gated governance tagging.
+  # Read-only inspector (H2). Discovery, tag reads and (planned) Bedrock explanations. It has NO
+  # governance-table access and NO tagging permissions; explicit Denies guard against either
+  # being added later (for example through a broadened managed policy).
   InspectorRole:
     Type: AWS::IAM::Role
     Properties:
       RoleName: CloudGuardInspectorRole
-      Description: Assumed by CloudGuard AI to inspect this account (read-only + approved tagging).
+      Description: Assumed by CloudGuard AI to inspect this account (read-only).
       MaxSessionDuration: 3600
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
-          - Effect: Allow
+          - Sid: OnlyNamedPrincipalsOfThisAccount
+            Effect: Allow
             Principal:
-              AWS: !Sub arn:aws:iam::${AWS::AccountId}:root
+              AWS: !Ref InspectorTrustedPrincipalArns
             Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:PrincipalAccount: !Ref AWS::AccountId
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/SecurityAudit
         - arn:aws:iam::aws:policy/job-function/ViewOnlyAccess
       Policies:
-        - PolicyName: CloudGuardRuntime
+        - PolicyName: CloudGuardInspectorReadOnly
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
+              - Sid: TagDiscoveryReads
+                Effect: Allow
+                Action:
+                  - lambda:ListFunctions
+                  - lambda:ListTags
+                  - dynamodb:ListTables
+                  - dynamodb:DescribeTable
+                  - dynamodb:ListTagsOfResource
+                  - s3:ListAllMyBuckets
+                  - s3:GetBucketTagging
+                  - s3:GetBucketLocation
+                  - ec2:DescribeInstances
+                Resource: "*"
               - Sid: InvokeBedrockModels
                 Effect: Allow
                 Action:
@@ -52,40 +82,137 @@ Resources:
                 Resource:
                   - arn:aws:bedrock:*::foundation-model/*
                   - !Sub arn:aws:bedrock:*:${AWS::AccountId}:inference-profile/*
-              - Sid: ScanHistory
-                Effect: Allow
+              # Covers CloudGuard's four supported resource types plus the Resource Groups Tagging
+              # API - not every tagging API in AWS. s3:PutBucketTagging also authorizes
+              # DeleteBucketTagging (per the S3 API reference).
+              - Sid: InspectorNeverTagsSupportedResources
+                Effect: Deny
                 Action:
-                  - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:Query
-                  - dynamodb:BatchWriteItem
-                Resource: !GetAtt ScanTable.Arn
-              # Approval-gated remediation: governance tags only. The application also
-              # enforces the key allow-list and requires explicit user approval.
-              # KNOWN ISSUES (Phase 3 review): blocks approved custom tags; S3 statement is
-              # unrestricted and can rewrite/wipe bucket tags; read and write share one role.
-              # To be replaced in Phase 4 by a separate tagger role - see docs/phase4-iam-design.md.
-              # Intentionally unchanged until that replacement is approved.
-              - Sid: GovernanceTaggingOnly
-                Effect: Allow
-                Action:
-                  - tag:TagResources
                   - lambda:TagResource
-                  - ec2:CreateTags
+                  - lambda:UntagResource
                   - dynamodb:TagResource
-                Resource: "*"
-                Condition:
-                  ForAllValues:StringEquals:
-                    aws:TagKeys: [Owner, Project, Environment, CostCenter]
-              - Sid: S3BucketTagging
-                Effect: Allow
-                Action:
+                  - dynamodb:UntagResource
+                  - ec2:CreateTags
+                  - ec2:DeleteTags
                   - s3:PutBucketTagging
+                  - tag:TagResources
+                  - tag:UntagResources
                 Resource: "*"
+              # Unconditional guardrail (AWS discourages condition-based Deny policies for DynamoDB).
+              - Sid: InspectorNeverWritesGovernanceTable
+                Effect: Deny
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:PartiQLInsert
+                  - dynamodb:PartiQLUpdate
+                  - dynamodb:PartiQLDelete
+                Resource:
+                  - !GetAtt ScanTable.Arn
+                  - !Sub "${ScanTable.Arn}/index/*"
+
+  # Governance participants (requesters, approvers, executors), attached out of band to the
+  # principals they use; the CLI writes with the caller's own credentials so separation of duties
+  # can compare verified identities. Allow-only, scoped by partition-key prefix:
+  #   PROPOSAL#<id>, IDEMP#<scope>#<key>, NONCE#<nonce>  (NOT AUTHZ#/POLICY#)
+  # LIMITATION: this grants every PROPOSAL#/IDEMP#/NONCE# partition - not only the caller's own
+  # proposals or keys - and any sort key inside them. It does NOT enforce the approval workflow
+  # against direct table access (see docs/aws-permissions.md "Known limitations").
+  # Transactional entries are authorized as their item actions; there is no transaction IAM action.
+  GovernanceParticipantPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: CloudGuardGovernanceParticipant
+      Description: CloudGuard governance participants - proposal, decision and execution records (not allow-list or policies).
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: P1ParticipantTransactionalWrites
+            Effect: Allow
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+            Resource: !GetAtt ScanTable.Arn
+            Condition:
+              StringEquals:
+                dynamodb:EnclosingOperation: TransactWriteItems
+              ForAllValues:StringLike:
+                dynamodb:LeadingKeys: ["PROPOSAL#*", "IDEMP#*", "NONCE#*"]
+              "Null":
+                dynamodb:LeadingKeys: "false"
+          - Sid: P2ParticipantPlainProposalWrites
+            Effect: Allow
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+            Resource: !GetAtt ScanTable.Arn
+            Condition:
+              "Null":
+                dynamodb:EnclosingOperation: "true"
+                dynamodb:LeadingKeys: "false"
+              ForAllValues:StringLike:
+                dynamodb:LeadingKeys: ["PROPOSAL#*"]
+          - Sid: P3ParticipantItemReads
+            Effect: Allow
+            Action: dynamodb:GetItem
+            Resource: !GetAtt ScanTable.Arn
+            Condition:
+              ForAllValues:StringLike:
+                dynamodb:LeadingKeys: ["PROPOSAL#*", "IDEMP#*", "NONCE#*", "POLICY#*", "AUTHZ#*"]
+              "Null":
+                dynamodb:LeadingKeys: "false"
+          - Sid: P4ParticipantProposalQueries
+            Effect: Allow
+            Action: dynamodb:Query
+            Resource: !GetAtt ScanTable.Arn
+            Condition:
+              ForAllValues:StringLike:
+                dynamodb:LeadingKeys: ["PROPOSAL#*"]
+              "Null":
+                dynamodb:LeadingKeys: "false"
+
+  # Authorization allow-list and tagging-policy administrators (AUTHZ#, POLICY#). Both stores
+  # commit with two conditional Puts in one transaction, so only transactional PutItem is needed:
+  # no UpdateItem, DeleteItem or ConditionCheckItem. No tagging, no proposal records.
+  GovernanceAdminPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: CloudGuardGovernanceAdmin
+      Description: CloudGuard allow-list and tagging-policy administration (AUTHZ#, POLICY#) only.
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: A1AdminTransactionalVersionWrites
+            Effect: Allow
+            Action: dynamodb:PutItem
+            Resource: !GetAtt ScanTable.Arn
+            Condition:
+              StringEquals:
+                dynamodb:EnclosingOperation: TransactWriteItems
+              ForAllValues:StringLike:
+                dynamodb:LeadingKeys: ["AUTHZ#*", "POLICY#*"]
+              "Null":
+                dynamodb:LeadingKeys: "false"
+          - Sid: A2AdminReads
+            Effect: Allow
+            Action:
+              - dynamodb:GetItem
+              - dynamodb:Query
+            Resource: !GetAtt ScanTable.Arn
+            Condition:
+              ForAllValues:StringLike:
+                dynamodb:LeadingKeys: ["AUTHZ#*", "POLICY#*"]
+              "Null":
+                dynamodb:LeadingKeys: "false"
+
+  # The remediation writer (CloudGuardTaggerRole) is deliberately NOT part of this template: no live
+  # writer exists. Its design is in infra/iam/proposed/ and docs/phase4-iam-design.md.
 
   # Single-table governance store; key patterns are documented in docs/governance-persistence.md.
   #   POLICY#<id>  / VERSION#<n> | ACTIVE      (implemented, Phase 2)
-  #   scans, findings, proposals, audit         (planned, Phase 5)
+  #   PROPOSAL#, IDEMP#, NONCE#, AUTHZ#        (implemented, Phase 4)
   # Point-in-time recovery protects append-only audit history from accidental deletes.
   ScanTable:
     Type: AWS::DynamoDB::Table
@@ -104,9 +231,13 @@ Resources:
           KeyType: HASH
         - AttributeName: SK
           KeyType: RANGE
-      TimeToLiveSpecification:
-        AttributeName: expires_at
-        Enabled: true
+      # NO TTL - and it must stay disabled. DynamoDB TTL is table-wide and keys only on an attribute
+      # name, while governance participants and administrators can write arbitrary attributes on the
+      # items they may write (PROPOSAL#/IDEMP#/NONCE#, AUTHZ#/POLICY#). With TTL enabled, any of them
+      # could set ttl_epoch in the past and have DynamoDB delete audit, allow-list or policy records -
+      # and deleting every AUTHZ# item would reopen the allow-list bootstrap. Re-enabling TTL reopens
+      # that deletion vulnerability. ttl_epoch on IDEMP#/NONCE# items is an inert retention hint.
+      # Business expiry is the separate attribute proposal_expires_at.
       Tags:
         - Key: Project
           Value: cloudguard
@@ -155,5 +286,9 @@ Resources:
 Outputs:
   InspectorRoleArn:
     Value: !GetAtt InspectorRole.Arn
+  GovernanceParticipantPolicyArn:
+    Value: !Ref GovernanceParticipantPolicy
+  GovernanceAdminPolicyArn:
+    Value: !Ref GovernanceAdminPolicy
   ScanTableName:
     Value: !Ref ScanTable

@@ -1,0 +1,26 @@
+{
+  "schema_version": "cloudguard.authz/v1",
+  "accounts": {
+    "123456789012": {
+      "admin": [
+        "dev:admin"
+      ],
+      "create": [
+        "dev:alice",
+        "dev:bob"
+      ],
+      "approve": [
+        "dev:bob",
+        "dev:carol"
+      ],
+      "reject": [
+        "dev:alice",
+        "dev:bob",
+        "dev:carol"
+      ],
+      "execute": [
+        "dev:alice"
+      ]
+    }
+  }
+}
