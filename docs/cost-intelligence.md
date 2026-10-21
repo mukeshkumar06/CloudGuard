@@ -6,13 +6,13 @@ Two read-only capabilities, backed by AWS Cost Explorer and AWS Cost Anomaly Det
 
 No LLM is involved. Python makes the API calls, does the arithmetic and writes the spoken summary. Code: `backend/cloudguard/cost/`.
 
-**Status:** implemented and tested offline with botocore Stubber and synthetic fixtures. A read-only CLI (see "Cost Intelligence CLI") exists. **Live AWS:** a live run of the cost CLI against Cost Explorer was reported on 2026-10-16 (the observations are under "Unresolved assumptions"); its raw output was not retained. Not deployed. There is no MCP server yet.
+**Status:** implemented and tested offline with botocore Stubber and synthetic fixtures. A read-only CLI (see "Cost Intelligence CLI") and a local MCP server with six read-only cost tools (see "MCP server") exist. **Live AWS:** a live run of the cost CLI against Cost Explorer was reported on 2026-10-16 (the observations are under "Unresolved assumptions"); its raw output was not retained. The MCP server has **not** been run against real AWS. Not deployed, and not connected to Alexa+.
 
 ## Step 1: AWS pre-flight (you do this; CloudGuard never grants itself permissions)
 
 | # | Check | How | Why |
 |---|---|---|---|
-| 1 | Attach the read-only policy | Attach [`infra/iam/cost-intelligence-policy.json`](../infra/iam/cost-intelligence-policy.json) to the identity CloudGuard runs as. For local development, that's your CLI user. | The current CLI user has no `ce:*` permissions. |
+| 1 | Attach the read-only policy | Attach [`infra/iam/cost-intelligence-policy.json`](../infra/iam/cost-intelligence-policy.json) to the identity CloudGuard runs as. For local development, that's your CLI user. | Required for live mode. In the reported live run on 2026-10-16 (raw output not retained), the developer CLI identity's `GetCostAndUsage`, `GetAnomalyMonitors` and `GetAnomalies` calls succeeded. |
 | 2 | Cost Explorer is enabled | Open Billing and Cost Management, then Cost Explorer, once. | AWS documents a delay of up to about 24 hours before data is ready after first enablement. |
 | 3 | Billing access for IAM identities | As root: Account settings, then "IAM user and role access to Billing information", then Activate. | This gates the console for IAM identities. Whether it also gates the CE **API** isn't confirmed; step 4 tells us. |
 | 4 | Smoke test (4 requests, about $0.04) | Run the commands below and keep the output. | It proves permissions and data availability, and gives us the **real RECORD_TYPE values** (see "Unresolved assumptions"). |
@@ -79,7 +79,7 @@ Every returned line is placed in **exactly one** category. Matching ignores case
 
 - **Console doc:** named in the [Cost Explorer user guide's Charge type list](https://docs.aws.amazon.com/cost-management/latest/userguide/ce-filtering.html).
 - **Candidate:** a plausible API spelling or billing line-item type that isn't in that list.
-- **Neither source is verified against the API yet.** Each line in `record_types` carries its `match_source`, so the first live run shows which entries matched.
+- **Partly verified against the API.** In the reported live run on 2026-10-16 (raw output not retained), `GetCostAndUsage` grouped by `RECORD_TYPE` returned `Credit`, `Tax` and `Usage`. Every other value, including all discount spellings, is still unverified, and `GetDimensionValues` was never run. Each line in `record_types` carries its `match_source`, so a live run shows which entries matched.
 
 **Figures and identities.** The tests check all of these, including on 200 randomised lines.
 
@@ -134,7 +134,9 @@ sum(services.amount) = charges_before_discounts_credits_and_refunds
 | Anomalies (monitor exists) | 2 | 10 |
 | Anomalies (no or unevaluated monitor) | 1 | 5 |
 
-## Response contract (for the coming MCP tools)
+## Response contract (cost reports, CLI and MCP cost tools)
+The CLI and the six MCP cost tools (see "MCP server") return these reports. The MCP cost tools are implemented and tested offline with fixtures and botocore Stubber. They have **not** been run against live AWS, the server is not deployed, and there is no Alexa+ integration.
+
 - **Version:** `schema_version: "1"`. Changes are **additive only**: fields are never renamed or removed, and new fields are optional.
 - **Timestamps:** `generated_at` is when CloudGuard built the report. `retrieved_at` is when AWS last answered successfully, or null if it never did. Once caching exists, `retrieved_at` is the data's "last updated" time.
 - **Cache:** `cache` is reserved (`hit`, `stored_at`, `ttl_seconds`) and is always null until caching is built.
@@ -227,11 +229,68 @@ sum(services.amount) = charges_before_discounts_credits_and_refunds
 - **Request counts:** `bill`, `top-services` and full-month `compare` take one paginated request. Matching-days comparisons take two. `anomalies` takes one or two.
 - **Live verification:** a live CLI run was reported on 2026-10-16. It is the source of the observations marked "live" under "Unresolved assumptions" (month-to-date `End`, `RECORD_TYPE` values `Credit`/`Tax`/`Usage`, the `LastEvaluatedDate` format). Its raw output was not retained, and the other live-mode paths remain unverified.
 
-## Unresolved assumptions (to verify with pre-flight step 4)
-1. **RECORD_TYPE strings:** `Credit`, `Tax` and `Usage` were confirmed live on 2026-10-16. The other values are unconfirmed, and discount names are candidates only.
+## MCP server (cost tools)
+
+`python -m cloudguard.server [--transport stdio|streamable-http] [--port 8000] [--mode fixture|live] [--fixture NAME] [--profile NAME] [--max-pages N]` (run from `backend/`).
+
+**Code:** `cloudguard/server/`. It's the first and only MCP server.
+- `app.py` builds it and is the single place tools are registered.
+- `cost_tools.py` holds the tools.
+- `context.py` holds the startup AWS context.
+
+The CLI and the server both call `cloudguard/cost/service.py`, so the billing logic exists once.
+
+**Server setup:**
+- **Framework:** FastMCP from the `mcp` Python SDK 1.30.0 (the version locked in `backend/uv.lock`), protocol 2025-11-25.
+- **HTTP transport:** stateless Streamable HTTP with JSON responses on `/mcp`, bound to `127.0.0.1` only. stdio is also available.
+- **Default mode:** fixture (synthetic data, no AWS).
+
+| Tool | Question | Inputs |
+|---|---|---|
+| `get_monthly_aws_bill` | What was my AWS bill last month? | `month` (default `last-month`); the current month is refused |
+| `get_current_month_spending` | How much have I spent this month? | none |
+| `get_cost_breakdown` | Which AWS service costs me the most? | `month` (default `last-month`), `limit` 1–50 (default 10) |
+| `compare_monthly_costs` | Compare September and October | `earlier_month`, `later_month` (both or neither) |
+| `investigate_cost_increase` | Why did my AWS costs increase? | `earlier_month`, `later_month` (both or neither) |
+| `get_cost_anomalies` | Are there any unusual charges? | `lookback_days` 1–90 (default 7) |
+
+**Inputs:**
+- `month` matches `^(\d{4}-\d{2}|last-month|this-month|[A-Za-z]{3,9})$`, is at most 10 characters, and is resolved against the server's as-of date: the fixture's `as_of`, or today (UTC) in live mode.
+- Every input schema sets `additionalProperties: false`, and the server rejects unknown arguments; FastMCP would otherwise ignore them silently.
+- Invalid input returns a tool error (`isError`).
+
+**Output:** every result is structured content that matches the tool's `outputSchema`.
+- **Envelope fields:** `schema_version`, `tool`, `outcome` (`answered` / `findings` / `unavailable`), `mode`, `data_source`, `as_of`, `currency`, `freshness` (`generated_at`, `retrieved_at`, `aws_requests`, `estimated`, `anomaly_last_evaluated`, `anomaly_data_stale`), `speech`, and `report`.
+- **Bill tools:** `get_monthly_aws_bill`, `get_current_month_spending` and `get_cost_breakdown` also return `period` and `is_final_bill` (always `false` for month to date).
+- **Ranking:** `get_cost_breakdown` also returns `ranking`.
+- **`unavailable`:** means no figures were produced. It is never zero spend.
+
+**Annotations:** `readOnlyHint=true`, `destructiveHint=false` and `idempotentHint=true`; `openWorldHint` is true only in live mode.
+
+**AWS account context and authorization:**
+- **Credentials:** the server uses its own process credentials (the default chain, or `--profile` at startup) through `ce.make_client`.
+- **No caller-chosen context:** no tool accepts an account, profile, role, region or credentials, so an MCP client can't redirect the server.
+- **No authentication in the local server (`python -m cloudguard.server`):** whoever can reach it acts with its credentials. That's why its HTTP transport binds to localhost only.
+- **Not wired into the allow-list:** the Phase 4 allow-list (`governance/remediation/authz.py`) has no read permission, so cost tools don't use it yet. Server-side identity verification is still future work (`identity.py`, Phase 7).
+
+**Limitations:**
+- No MCP authentication: use stdio, or the localhost-only HTTP transport, on a machine you control.
+- Fixture mode is the default and is what the tests cover. Live mode has not been run against real AWS through the MCP server.
+- Not deployed, and not connected to Alexa+.
+
+## Live verification and unresolved assumptions
+**Verified by the reported live CLI run on 2026-10-16** (developer CLI identity; raw output not retained):
+- the `us-east-1` Cost Explorer endpoint worked;
+- `GetCostAndUsage`, `GetAnomalyMonitors` and `GetAnomalies` succeeded;
+- a month-to-date request was accepted (item 7);
+- `RECORD_TYPE` returned `Credit`, `Tax` and `Usage` (item 1).
+
+**Still unresolved** (pre-flight steps 2–4 and 6 remain relevant): the items below, plus how the first-enablement delay appears in the API, and the MCP cost tools in live mode (never run live).
+
+1. **RECORD_TYPE strings:** `Credit`, `Tax` and `Usage` were confirmed live on 2026-10-16. The other values are unconfirmed, discount names are candidates only, and `GetDimensionValues` was never run.
 2. **Anomaly currency:** that anomaly amounts are USD rests on AWS's "dollar value" wording, not on a returned field.
 3. **Ongoing anomalies:** whether `GetAnomalies` with a `DateInterval` returns anomalies that haven't ended yet is unconfirmed.
 4. **Date formats:** `LastEvaluatedDate` was returned live as an ISO timestamp with nanoseconds (for example `2026-10-16T12:08:00.323472256Z`), which parsing handles. Anomaly date formats are unconfirmed, because no anomaly was returned. Parsing accepts `YYYY-MM-DD` or an ISO timestamp.
-5. **Free plan:** whether the Free plan allows or charges for CE API requests is unconfirmed.
+5. **Free plan:** whether the Free plan allows or charges for CE API requests, and whether credits cover them, is unconfirmed. The 2026-10-16 calls succeeded, but no record of their charge was kept.
 6. **Billing access:** whether the IAM billing-access setting gates the CE API is unconfirmed.
 7. **Month-to-date End:** verified live on 2026-10-16: `GetCostAndUsage` accepted `End` = tomorrow (UTC).
