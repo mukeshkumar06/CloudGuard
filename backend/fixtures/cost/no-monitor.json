@@ -1,0 +1,166 @@
+{
+  "description": "Costs are normal, but no Cost Anomaly Detection monitor exists.",
+  "synthetic": true,
+  "as_of": "2026-10-16",
+  "currency": "USD",
+  "cost_and_usage": {
+    "periods": {
+      "2026-08-01/2026-09-01": {
+        "estimated": false,
+        "lines": [
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Usage",
+            "18.20"
+          ],
+          [
+            "Amazon Simple Storage Service",
+            "Usage",
+            "2.10"
+          ],
+          [
+            "AWS Lambda",
+            "Usage",
+            "0.35"
+          ],
+          [
+            "AmazonCloudWatch",
+            "Usage",
+            "1.05"
+          ],
+          [
+            "Tax",
+            "Tax",
+            "3.89"
+          ],
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Credit",
+            "-2.00"
+          ]
+        ]
+      },
+      "2026-09-01/2026-10-01": {
+        "estimated": false,
+        "lines": [
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Usage",
+            "31.40"
+          ],
+          [
+            "Amazon Simple Storage Service",
+            "Usage",
+            "2.30"
+          ],
+          [
+            "AWS Lambda",
+            "Usage",
+            "0.40"
+          ],
+          [
+            "AmazonCloudWatch",
+            "Usage",
+            "1.10"
+          ],
+          [
+            "AWS Support (Developer)",
+            "Support fee",
+            "2.90"
+          ],
+          [
+            "Tax",
+            "Tax",
+            "6.98"
+          ],
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Credit",
+            "-2.00"
+          ],
+          [
+            "Amazon Simple Storage Service",
+            "Refund",
+            "-0.25"
+          ]
+        ]
+      },
+      "2026-10-01/2026-10-17": {
+        "estimated": true,
+        "lines": [
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Usage",
+            "14.10"
+          ],
+          [
+            "Amazon Simple Storage Service",
+            "Usage",
+            "1.20"
+          ],
+          [
+            "AWS Lambda",
+            "Usage",
+            "0.18"
+          ],
+          [
+            "AmazonCloudWatch",
+            "Usage",
+            "0.50"
+          ],
+          [
+            "Tax",
+            "Tax",
+            "2.88"
+          ]
+        ]
+      },
+      "2026-09-01/2026-09-17": {
+        "estimated": false,
+        "lines": [
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Usage",
+            "16.05"
+          ],
+          [
+            "Amazon Simple Storage Service",
+            "Usage",
+            "1.22"
+          ],
+          [
+            "AWS Lambda",
+            "Usage",
+            "0.21"
+          ],
+          [
+            "AmazonCloudWatch",
+            "Usage",
+            "0.58"
+          ],
+          [
+            "AWS Support (Developer)",
+            "Support fee",
+            "2.90"
+          ],
+          [
+            "Tax",
+            "Tax",
+            "3.78"
+          ],
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Credit",
+            "-1.00"
+          ]
+        ]
+      }
+    }
+  },
+  "anomaly_monitors": {
+    "items": []
+  },
+  "anomalies": {
+    "items": []
+  }
+}

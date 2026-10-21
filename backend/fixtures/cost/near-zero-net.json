@@ -1,0 +1,59 @@
+{
+  "description": "Usage almost exactly covered by credits, as seen in live verification: each month's calculated net is a few billionths of a dollar (Cost Explorer's 10-decimal amounts don't cancel exactly). Net changes between months are numerical noise and must not be reported as an increase, a decrease or a net credit of 0.00.",
+  "synthetic": true,
+  "as_of": "2026-10-16",
+  "currency": "USD",
+  "cost_and_usage": {
+    "periods": {
+      "2026-08-01/2026-09-01": {
+        "estimated": false,
+        "lines": [
+          ["Amazon Simple Storage Service", "Usage", "0.1800000000"],
+          ["Amazon Simple Email Service", "Usage", "0.0300000000"],
+          ["Tax", "Tax", "0"],
+          ["Amazon Simple Storage Service", "Credit", "-0.2100000010"]
+        ]
+      },
+      "2026-09-01/2026-10-01": {
+        "estimated": false,
+        "lines": [
+          ["Amazon Simple Storage Service", "Usage", "0.2000000000"],
+          ["AWS AppSync", "Usage", "0.0400000000"],
+          ["AWS Lambda", "Usage", "0.0003000000"],
+          ["Tax", "Tax", "0"],
+          ["Amazon Simple Storage Service", "Credit", "-0.2403000040"]
+        ]
+      },
+      "2026-09-01/2026-09-17": {
+        "estimated": false,
+        "lines": [
+          ["Amazon Simple Storage Service", "Usage", "0.1100000000"],
+          ["AWS AppSync", "Usage", "0.0200000000"],
+          ["Amazon Simple Storage Service", "Credit", "-0.1300000030"]
+        ]
+      },
+      "2026-10-01/2026-10-17": {
+        "estimated": true,
+        "lines": [
+          ["Amazon Simple Storage Service", "Usage", "0.0900000000"],
+          ["AWS AppSync", "Usage", "0.0070000000"],
+          ["Amazon Simple Storage Service", "Credit", "-0.0970000015"]
+        ]
+      }
+    }
+  },
+  "anomaly_monitors": {
+    "items": [
+      {
+        "MonitorArn": "arn:aws:ce::000000000000:anomalymonitor/synthetic-monitor",
+        "MonitorName": "Default-Services-Monitor",
+        "MonitorType": "DIMENSIONAL",
+        "MonitorDimension": "SERVICE",
+        "LastEvaluatedDate": "2026-10-16T12:08:00.323472256Z"
+      }
+    ]
+  },
+  "anomalies": {
+    "items": []
+  }
+}

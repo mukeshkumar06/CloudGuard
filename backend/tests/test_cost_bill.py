@@ -156,7 +156,7 @@ def test_every_category_is_separated_and_reconciles():
     speech = bill_speech(report)
     assert speech.startswith("For the September 2026 AWS billing month, charges before discounts, credits and "
                              "refunds were 39.25 US dollars, measured as unblended cost.")
-    assert ("After discounts of 0.30, credits of 7.25 and refunds of 1.00, CloudGuard calculates a net of 31.10. "
+    assert ("After discounts of 0.30, credits of 7.25 and refunds of 1.00, CloudGuard calculates a net charge of 31.10. "
             "That's a CloudGuard calculation and may differ from your invoice.") in speech
     assert ("Warning: 1 type of billing entry could not be classified. It totals 0.40. Unclassified amounts are "
             "not counted as charges but are included in CloudGuard's net.") in speech
@@ -207,7 +207,7 @@ def test_unclassified_warning_is_spoken_and_structured_even_when_amounts_net_to_
     assert_reconciles(m)
     speech = bill_speech(report)
     assert ("Warning: 2 types of billing entries could not be classified. Together they total 0.00.") in speech
-    assert "CloudGuard calculates a net of 1.00" in speech
+    assert "CloudGuard calculates a net charge of 1.00" in speech
 
 
 def test_no_unclassified_warning_when_everything_is_classified():

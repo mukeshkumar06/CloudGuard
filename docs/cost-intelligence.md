@@ -6,7 +6,7 @@ Two read-only capabilities, backed by AWS Cost Explorer and AWS Cost Anomaly Det
 
 No LLM is involved. Python makes the API calls, does the arithmetic and writes the spoken summary. Code: `backend/cloudguard/cost/`.
 
-**Status:** implemented and tested offline with botocore Stubber. **Not yet run against real AWS.** There is no CLI or MCP server yet.
+**Status:** implemented and tested offline with botocore Stubber and synthetic fixtures. A read-only CLI (see "Cost Intelligence CLI") exists. **Live AWS:** a live run of the cost CLI against Cost Explorer was reported on 2026-10-16 (the observations are under "Unresolved assumptions"); its raw output was not retained. Not deployed. There is no MCP server yet.
 
 ## Step 1: AWS pre-flight (you do this; CloudGuard never grants itself permissions)
 
@@ -138,13 +138,100 @@ sum(services.amount) = charges_before_discounts_credits_and_refunds
 - **Version:** `schema_version: "1"`. Changes are **additive only**: fields are never renamed or removed, and new fields are optional.
 - **Timestamps:** `generated_at` is when CloudGuard built the report. `retrieved_at` is when AWS last answered successfully, or null if it never did. Once caching exists, `retrieved_at` is the data's "last updated" time.
 - **Cache:** `cache` is reserved (`hit`, `stored_at`, `ttl_seconds`) and is always null until caching is built.
-- **Warnings:** `warnings` is a list of codes: `ESTIMATED`, `UNCLASSIFIED_RECORD_TYPES`, `CURRENCY_MISMATCH`, `STALE_EVALUATION`.
+- **Warnings:** `warnings` is a list of codes: `ESTIMATED`, `UNCLASSIFIED_RECORD_TYPES`, `CURRENCY_MISMATCH`, `STALE_EVALUATION`, `MONTH_TO_DATE`.
 - **Never included:** account IDs, ARNs, credentials and raw AWS error messages. Errors carry only the code, the operation, AWS's documented description and the inferred causes.
 
+## Cost Intelligence CLI
+
+`python -m cloudguard.cost` (run from `backend/`, for example `.venv\Scripts\python.exe -m cloudguard.cost bill`). It's read-only and tests the cost answers before they're exposed over MCP. Code: `cost/__main__.py`, `cost/compare.py`, `cost/fixture.py`, `cost/summary.py`, plus speech in `cost/voice.py`.
+
+| Question | Command |
+|---|---|
+| What was my AWS bill last month? | `bill` (default `--period last-month`) |
+| How much have I spent this month? | `bill --period this-month` |
+| Compare September and October | `compare --months september october` (default: the last two completed months) |
+| Which AWS service costs me the most? | `top-services [--period ... \| --month ...]` |
+| Why did my AWS costs increase? | `explain-increase [--months EARLIER LATER]` |
+| Are there any unusual charges? | `anomalies [--lookback-days N]` |
+
+**Common options:**
+- `--mode fixture|live` (default `fixture`).
+- `--as-of YYYY-MM-DD` (UTC): the reference date. The default is today in live mode, and the fixture's `as_of` in fixture mode.
+- `--format summary|json|speech` (default `summary`).
+- `--fixture NAME|PATH` (fixture mode only).
+- `--profile` (live mode only).
+- `--max-pages N`.
+
+**Month arguments:** a month is `YYYY-MM`, a month name or an abbreviation of three letters or more (its latest occurrence not after `--as-of`), `last-month`, or `this-month`.
+
+**Exit codes:**
+
+| Code | Meaning |
+|---|---|
+| 0 | Answered. This includes "no anomalies" and "the cause can't be determined". |
+| 1 | AWS Cost Anomaly Detection reported anomalies. |
+| 2 | Invalid arguments, for example a bad or future month, or an unknown fixture. |
+| 3 | AWS/API error or data unavailable: access denied, throttling, `DataUnavailableException`, a page cap hit, no cost data, mixed currencies, no monitor, a monitor never evaluated, or a profile/credentials problem. |
+| 4 | Internal error, including a malformed or non-synthetic fixture. |
+
+**Output rules:**
+- **The current month is always month to date.** Its period `kind` is `month_to_date`. The summary heading says "NOT a final bill", and the spoken reply says "month-to-date spending, not a final bill".
+- **Completed months:** `kind` is `completed_month`. AWS may still mark them `ESTIMATED`.
+- **Month-to-date request range:** `Start=` the first of the month and `End=` the day after `--as-of`, so the as-of day is included. Cost Explorer accepted this in live verification on 2026-10-16 (`Start=2026-10-01`, `End=2026-10-17`).
+- **Comparison with a month in progress:** `compare` and `explain-increase` use `basis: matching_days`. The earlier month is cut to the same number of days with a second request, and its full-month total is reported only as context. A partial month is never compared with a full one.
+- **Top services:** ranked by charges before discounts, credits and refunds. AWS's tax-only `Tax` line is excluded from the ranking and the spoken reply, but disclosed as `ranking.excluded_tax` and in the summary.
+- **Increase attribution is arithmetic, not diagnosis.** The calculated net change splits exactly into per-service charge changes, plus discount, credit, refund and unclassified changes; the tests check this.
+  - **Materiality threshold:** `MATERIALITY_THRESHOLD = 0.01` in the report currency's units (`models.py`), one cent, the smallest amount an invoice shows. Live Cost Explorer amounts carry about 10 decimal places, and when credits cover usage the lines leave residues such as `1.5E-9`. Those are noise, not spend.
+  - **Which contributions count:** only contributions of at least the threshold are listed as drivers or offsets. The rest are totalled in `below_threshold_change`. Drivers, offsets and that total always add up exactly to `net_change`.
+  - **Comparisons are exact:** they use Decimal throughout, and billing figures are never rounded or suppressed.
+  - **`INCREASE_ATTRIBUTED`:** the net rose by at least the threshold. It names where the increase appears, never why.
+  - **`NO_INCREASE`:** the net fell by at least the threshold.
+  - **`NO_MATERIAL_CHANGE`:** the net moved by less than the threshold, including exactly zero.
+  - **`CANNOT_DETERMINE`:** the net rose materially, but either the largest contribution is unclassified, or no single contribution reaches the threshold.
+  - **Spoken reply:** always says CloudGuard can't see why usage changed.
+- **Spoken nets** take their sign from the unrounded value:
+  - "a net charge of 0.25";
+  - "a net credit of 0.50" (never "minus");
+  - "a net of zero";
+  - "a net of approximately zero (charges and credits approximately balance)" when the magnitude is below `SPEECH_NET_TOLERANCE = 0.005` (`voice.py`). Such an amount would otherwise be read out as "0.00".
+
+  Spoken month-over-month differences below that tolerance are "about the same". The summary report never prints "-0.00", and shows the exact value next to a near-zero net. JSON keeps exact amounts.
+- **JSON envelope:** `schema_version`, `command`, `mode`, `as_of`, `fixture`, `exit_code`, `speech`, then:
+  - `period` and `report` (a `BillReport`) for `bill` and `top-services`, plus `ranking` for `top-services`;
+  - `report` (a `CostComparison`) for `compare` and `explain-increase`;
+  - `report` (an `AnomalyReport`) for `anomalies`.
+
+**Fixture mode** (`backend/fixtures/cost/*.json`, all synthetic):
+- **How it runs:** `FixtureCostExplorer` answers the three operations in AWS's response shapes, pages with `NextPageToken`, and raises botocore `ClientError`s. Fixture runs therefore use the same pagination and error handling as live runs.
+- **No boto3, credentials or network:** fixture mode imports botocore exception classes, but never boto3, never reads credentials and never opens a network connection. A test checks this in a fresh interpreter.
+- **Scenarios:**
+
+| Fixture | Scenario |
+|---|---|
+| `demo` (default) | Normal completed month with tax, a support fee, a credit and a refund; month-over-month increase; month to date; one ongoing anomaly |
+| `decrease` | Costs fell; no anomalies |
+| `credits-refunds` | Credits and a refund make the net a credit |
+| `savings-plans` | Savings Plan covered usage, negation and recurring fee |
+| `unclassified` | Unknown record types drive the increase, so the cause can't be determined |
+| `no-monitor` | No anomaly monitor |
+| `stale-anomalies` | Monitor last evaluated six days earlier |
+| `anomalies-not-evaluated` | Monitor never evaluated |
+| `paginated` | 3 groups per page, 1 anomaly item per page |
+| `pagination-error` | Throttling on page 2; no partial totals |
+| `access-denied` | Access denied |
+| `data-unavailable` | `DataUnavailableException` |
+| `near-zero-net` | Credits cover usage to within billionths, so nets and month changes are noise (regression for live verification) |
+
+**Live mode:**
+- **Calls:** read-only `GetCostAndUsage`, `GetAnomalyMonitors` and `GetAnomalies`, through `ce.make_client`, to the `us-east-1` endpoint.
+- **Request counts:** `bill`, `top-services` and full-month `compare` take one paginated request. Matching-days comparisons take two. `anomalies` takes one or two.
+- **Live verification:** a live CLI run was reported on 2026-10-16. It is the source of the observations marked "live" under "Unresolved assumptions" (month-to-date `End`, `RECORD_TYPE` values `Credit`/`Tax`/`Usage`, the `LastEvaluatedDate` format). Its raw output was not retained, and the other live-mode paths remain unverified.
+
 ## Unresolved assumptions (to verify with pre-flight step 4)
-1. **RECORD_TYPE strings:** the exact API values are unconfirmed. Discount names are candidates only.
+1. **RECORD_TYPE strings:** `Credit`, `Tax` and `Usage` were confirmed live on 2026-10-16. The other values are unconfirmed, and discount names are candidates only.
 2. **Anomaly currency:** that anomaly amounts are USD rests on AWS's "dollar value" wording, not on a returned field.
 3. **Ongoing anomalies:** whether `GetAnomalies` with a `DateInterval` returns anomalies that haven't ended yet is unconfirmed.
-4. **Date formats:** the format of `LastEvaluatedDate` and the anomaly dates is unconfirmed. Parsing accepts `YYYY-MM-DD` or an ISO timestamp.
+4. **Date formats:** `LastEvaluatedDate` was returned live as an ISO timestamp with nanoseconds (for example `2026-10-16T12:08:00.323472256Z`), which parsing handles. Anomaly date formats are unconfirmed, because no anomaly was returned. Parsing accepts `YYYY-MM-DD` or an ISO timestamp.
 5. **Free plan:** whether the Free plan allows or charges for CE API requests is unconfirmed.
 6. **Billing access:** whether the IAM billing-access setting gates the CE API is unconfirmed.
+7. **Month-to-date End:** verified live on 2026-10-16: `GetCostAndUsage` accepted `End` = tomorrow (UTC).

@@ -1,6 +1,6 @@
 {
   "description": "Bill fully covered by promotional credits, with one refund; still estimated by AWS.",
-  "speech": "For the September 2026 AWS billing month, charges before discounts, credits and refunds were 13.06 US dollars, measured as unblended cost. After credits of 13.06 and refunds of 0.50, CloudGuard calculates a net of -0.50. That's a CloudGuard calculation and may differ from your invoice. The top services were Amazon Elastic Compute Cloud - Compute at 9.40, Amazon Simple Storage Service at 1.25 and Amazon DynamoDB at 0.42. That's 2.63 less than August, down 16.8 percent. AWS still marks these figures as estimated, so they may change.",
+  "speech": "For the September 2026 AWS billing month, charges before discounts, credits and refunds were 13.06 US dollars, measured as unblended cost. After credits of 13.06 and refunds of 0.50, CloudGuard calculates a net credit of 0.50. That's a CloudGuard calculation and may differ from your invoice. The top services were Amazon Elastic Compute Cloud - Compute at 9.40, Amazon Simple Storage Service at 1.25 and Amazon DynamoDB at 0.42. That's 2.63 less than August, down 16.8 percent. AWS still marks these figures as estimated, so they may change.",
   "report": {
     "schema_version": "1",
     "generated_at": "2026-10-15T09:30:00Z",

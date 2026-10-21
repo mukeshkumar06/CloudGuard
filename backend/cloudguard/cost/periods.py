@@ -31,3 +31,21 @@ def previous_billing_month(now: datetime) -> tuple[date, date]:
 def month_before(start: date) -> tuple[date, date]:
     """The calendar month immediately before the month that begins at `start`."""
     return month_start(start - timedelta(days=1)), start
+
+
+def next_month(start: date) -> date:
+    """The first day of the month after the month containing `start`."""
+    return (month_start(start) + timedelta(days=32)).replace(day=1)
+
+
+def days_in_month(d: date) -> int:
+    return (next_month(d) - month_start(d)).days
+
+
+def month_to_date_end(as_of: date) -> date:
+    """Exclusive end of the current month to date: the day after `as_of`, so `as_of` itself is included.
+
+    Cost Explorer data for the latest day is usually incomplete (AWS refreshes it at least daily).
+    NOT YET VERIFIED that Cost Explorer accepts an End of tomorrow for GetCostAndUsage.
+    """
+    return as_of + timedelta(days=1)

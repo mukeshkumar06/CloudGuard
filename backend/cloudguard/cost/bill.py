@@ -1,8 +1,8 @@
-"""Previous AWS billing month (UTC) from Cost Explorer, UnblendedCost only.
+"""AWS billing-month costs (UTC) from Cost Explorer, UnblendedCost only.
 
-One GetCostAndUsage request covers last month and the month before it, grouped by SERVICE and
-RECORD_TYPE. Each line is classified by RECORD_TYPE into exactly one category (record_types.py);
-unknown record types stay unclassified and are never counted as charges.
+One GetCostAndUsage request covers the month (or month to date) and, optionally, an earlier month to
+compare with, grouped by SERVICE and RECORD_TYPE. Each line is classified by RECORD_TYPE into exactly
+one category (record_types.py); unknown record types stay unclassified and are never counted as charges.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from cloudguard.cost.ce import DATA_UNAVAILABLE, PageLimitExceeded, RequestLog, paginate, reduce_error, resolve_max_pages
 from cloudguard.cost.models import (
-    METRIC, BillReport, BillStatus, MonthComparison, MonthCost, RecordTypeLine, ReportWarning, ServiceCost,
+    METRIC, BillReport, BillStatus, CostError, MonthComparison, MonthCost, RecordTypeLine, ReportWarning, ServiceCost,
 )
 from cloudguard.cost.periods import month_before, previous_billing_month
 from cloudguard.cost.record_types import CHARGE_CATEGORIES, Category, classify
@@ -85,53 +85,86 @@ def _aggregate(results: list[dict]) -> tuple[dict[date, _Month], set[str]]:
     return months, units
 
 
-def _compare(last: MonthCost, prev_start: date, prev: _Month | None) -> MonthComparison | None:
-    if prev is None or prev.lines == 0:
+def fetch_month_costs(client, start: date, end_exclusive: date, log: RequestLog,
+                      max_pages: int) -> tuple[dict[date, MonthCost], set[str]]:
+    """MONTHLY UnblendedCost by SERVICE and RECORD_TYPE for [start, end_exclusive), keyed by period start.
+
+    A range that starts or ends mid-month yields a partial period for that month. Raises the AWS error
+    (or PageLimitExceeded) instead of returning a partial result.
+    """
+    results = paginate(
+        client.get_cost_and_usage, "ResultsByTime", log, max_pages,
+        TimePeriod={"Start": start.isoformat(), "End": end_exclusive.isoformat()},
+        Granularity="MONTHLY",
+        Metrics=[METRIC],
+        GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}, {"Type": "DIMENSION", "Key": "RECORD_TYPE"}],
+    )
+    months, units = _aggregate(results)
+    return {s: m.to_model(s) for s, m in months.items()}, units
+
+
+def failure(exc: Exception) -> tuple[BillStatus, CostError]:
+    """The bill status and reduced error for a failed GetCostAndUsage request."""
+    error, denied = reduce_error(exc, OPERATION)
+    status = (BillStatus.DATA_UNAVAILABLE if error.code == DATA_UNAVAILABLE
+              else BillStatus.ACCESS_DENIED if denied else BillStatus.ERROR)
+    return status, error
+
+
+def has_data(month: MonthCost | None) -> bool:
+    return month is not None and bool(month.record_types)
+
+
+def compare_months(current: MonthCost, previous: MonthCost | None) -> MonthComparison | None:
+    if not has_data(previous):
         return None
-    current = last.charges_before_discounts_credits_and_refunds
-    change = current - prev.charges
-    percent = None if prev.charges == 0 else (change / prev.charges * 100).quantize(Decimal("0.1"), ROUND_HALF_UP)
-    return MonthComparison(previous_start=prev_start, previous_charges=prev.charges, change=change,
-                           change_percent=percent, estimated=last.estimated or prev.estimated)
+    now_charges = current.charges_before_discounts_credits_and_refunds
+    prev_charges = previous.charges_before_discounts_credits_and_refunds
+    change = now_charges - prev_charges
+    percent = None if prev_charges == 0 else (change / prev_charges * 100).quantize(Decimal("0.1"), ROUND_HALF_UP)
+    return MonthComparison(previous_start=previous.start, previous_charges=prev_charges, change=change,
+                           change_percent=percent, estimated=current.estimated or previous.estimated)
 
 
-def get_last_month_bill(client, now: datetime | None = None, *, max_pages: int | None = None,
-                        clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> BillReport:
+def get_bill(client, start: date, end_exclusive: date, now: datetime | None = None, *,
+             compare_start: date | None = None, max_pages: int | None = None,
+             clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> BillReport:
+    """Costs for [start, end_exclusive) in one request, optionally compared with the period at compare_start.
+
+    end_exclusive may fall mid-month (month to date); the report then covers a partial month and the
+    caller must not present it as a final bill.
+    """
     now = now or clock()
     pages = resolve_max_pages(max_pages)
-    start, end = previous_billing_month(now)
-    prev_start, _ = month_before(start)
     log = RequestLog(clock=clock)
 
     def report(**fields) -> BillReport:
-        return BillReport(period_start=start, period_end_exclusive=end, generated_at=now,
+        return BillReport(period_start=start, period_end_exclusive=end_exclusive, generated_at=now,
                           retrieved_at=log.last_success_at, aws_requests=log.count, **fields)
 
     try:
-        results = paginate(
-            client.get_cost_and_usage, "ResultsByTime", log, pages,
-            TimePeriod={"Start": prev_start.isoformat(), "End": end.isoformat()},
-            Granularity="MONTHLY",
-            Metrics=[METRIC],
-            GroupBy=[{"Type": "DIMENSION", "Key": "SERVICE"}, {"Type": "DIMENSION", "Key": "RECORD_TYPE"}],
-        )
+        months, units = fetch_month_costs(client, compare_start or start, end_exclusive, log, pages)
     except (ClientError, BotoCoreError, PageLimitExceeded) as exc:
-        error, denied = reduce_error(exc, OPERATION)
-        status = (BillStatus.DATA_UNAVAILABLE if error.code == DATA_UNAVAILABLE
-                  else BillStatus.ACCESS_DENIED if denied else BillStatus.ERROR)
+        status, error = failure(exc)
         return report(status=status, error=error)
 
-    months, units = _aggregate(results)
     if len(units) > 1:
         return report(status=BillStatus.MIXED_CURRENCY)
-    last = months.get(start)
-    if last is None or last.lines == 0:
+    month = months.get(start)
+    if not has_data(month):
         return report(status=BillStatus.NO_DATA, currency=next(iter(units), None))
-    month = last.to_model(start)
-    comparison = _compare(month, prev_start, months.get(prev_start))
+    comparison = compare_months(month, months.get(compare_start)) if compare_start else None
     warnings = []
     if month.estimated or (comparison is not None and comparison.estimated):
         warnings.append(ReportWarning.ESTIMATED)
     if month.unclassified_record_types:
         warnings.append(ReportWarning.UNCLASSIFIED_RECORD_TYPES)
     return report(status=BillStatus.OK, currency=units.pop(), month=month, comparison=comparison, warnings=warnings)
+
+
+def get_last_month_bill(client, now: datetime | None = None, *, max_pages: int | None = None,
+                        clock: Callable[[], datetime] = lambda: datetime.now(UTC)) -> BillReport:
+    now = now or clock()
+    start, end = previous_billing_month(now)
+    prev_start, _ = month_before(start)
+    return get_bill(client, start, end, now, compare_start=prev_start, max_pages=max_pages, clock=clock)

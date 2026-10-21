@@ -1,0 +1,79 @@
+{
+  "description": "Promotional credits cover every September charge, and a refund makes the calculated net a credit. August was also fully covered by credits.",
+  "synthetic": true,
+  "as_of": "2026-10-16",
+  "currency": "USD",
+  "cost_and_usage": {
+    "periods": {
+      "2026-08-01/2026-09-01": {
+        "estimated": false,
+        "lines": [
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Usage",
+            "10.00"
+          ],
+          [
+            "Tax",
+            "Tax",
+            "1.80"
+          ],
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Credit",
+            "-10.00"
+          ],
+          [
+            "Tax",
+            "Credit",
+            "-1.80"
+          ]
+        ]
+      },
+      "2026-09-01/2026-10-01": {
+        "estimated": false,
+        "lines": [
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Usage",
+            "12.00"
+          ],
+          [
+            "Tax",
+            "Tax",
+            "2.16"
+          ],
+          [
+            "Amazon Elastic Compute Cloud - Compute",
+            "Credit",
+            "-12.00"
+          ],
+          [
+            "Tax",
+            "Credit",
+            "-2.16"
+          ],
+          [
+            "Amazon Simple Storage Service",
+            "Refund",
+            "-0.50"
+          ]
+        ]
+      }
+    }
+  },
+  "anomaly_monitors": {
+    "items": [
+      {
+        "MonitorArn": "arn:aws:ce::000000000000:anomalymonitor/synthetic-monitor",
+        "MonitorName": "Default-Services-Monitor",
+        "MonitorType": "DIMENSIONAL",
+        "MonitorDimension": "SERVICE",
+        "LastEvaluatedDate": "2026-10-15"
+      }
+    ]
+  },
+  "anomalies": {
+    "items": []
+  }
+}

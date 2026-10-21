@@ -11,14 +11,16 @@ import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import boto3
 from botocore.config import Config
 
 from cloudguard.cost.models import CostError
 from cloudguard.governance.discovery.common import classify_error
 from cloudguard.governance.models import ErrorKind
+
+if TYPE_CHECKING:  # fixture mode must run without importing boto3
+    import boto3
 
 # Cost Explorer has a single endpoint regardless of where the account's resources live.
 CE_REGION = "us-east-1"

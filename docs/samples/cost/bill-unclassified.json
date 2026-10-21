@@ -1,6 +1,6 @@
 {
   "description": "Bill containing record types CloudGuard does not recognise.",
-  "speech": "For the September 2026 AWS billing month, charges before discounts, credits and refunds were 16.23 US dollars, measured as unblended cost. After discounts of 0.60, CloudGuard calculates a net of 18.88. That's a CloudGuard calculation and may differ from your invoice. Warning: 2 types of billing entries could not be classified. Together they total 3.25. Unclassified amounts are not counted as charges but are included in CloudGuard's net. The top services were Amazon Elastic Compute Cloud - Compute at 12.00 and Amazon Simple Storage Service at 1.75. That's 0.53 more than August, up 3.4 percent.",
+  "speech": "For the September 2026 AWS billing month, charges before discounts, credits and refunds were 16.23 US dollars, measured as unblended cost. After discounts of 0.60, CloudGuard calculates a net charge of 18.88. That's a CloudGuard calculation and may differ from your invoice. Warning: 2 types of billing entries could not be classified. Together they total 3.25. Unclassified amounts are not counted as charges but are included in CloudGuard's net. The top services were Amazon Elastic Compute Cloud - Compute at 12.00 and Amazon Simple Storage Service at 1.75. That's 0.53 more than August, up 3.4 percent.",
   "report": {
     "schema_version": "1",
     "generated_at": "2026-10-15T09:30:00Z",

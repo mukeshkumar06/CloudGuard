@@ -10,9 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
-
-import boto3
+from typing import TYPE_CHECKING, Protocol
 
 from cloudguard.governance.discovery.common import BOTO_CONFIG
 from cloudguard.governance.discovery.dynamodb_discovery import discover_dynamodb
@@ -20,6 +18,9 @@ from cloudguard.governance.discovery.ec2_discovery import discover_ec2
 from cloudguard.governance.discovery.lambda_discovery import discover_lambda
 from cloudguard.governance.discovery.s3_discovery import discover_s3
 from cloudguard.governance.models import SUPPORTED_RESOURCE_TYPES, DiscoveryResult
+
+if TYPE_CHECKING:  # type hints only; importing FixtureSource must not import boto3
+    import boto3
 
 log = logging.getLogger(__name__)
 
