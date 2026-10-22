@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "scopes": {
+    "arn:aws:lambda:ap-south-1:123456789012:function:legacy-report-generator": {
+      "Owner": {"value": "reporting-team", "source": "OPS-1234 service ownership review"},
+      "Project": {"value": "reporting", "source": "OPS-1234 service ownership review"}
+    },
+    "account:123456789012": {
+      "CostCenter": {"value": "CC-1000", "source": "Finance cost-allocation sheet 2026-Q4"}
+    }
+  }
+}

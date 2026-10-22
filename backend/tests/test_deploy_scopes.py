@@ -13,8 +13,8 @@ from starlette.websockets import WebSocketDisconnect
 
 from cloudguard.deploy.http_app import BearerAuthApp, StaticTokenAuthenticator
 
-TOKEN = "scope-test-token-not-a-secret-0123456789abcdef"
-ALL_SCOPES = frozenset({"cost:read"})
+TOKEN = "scope-test-token-not-a-secret"
+ALL_SCOPES = frozenset({"cost:read", "governance:read"})
 
 
 def inner_app(events):

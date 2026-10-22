@@ -99,3 +99,6 @@ python -m cloudguard.governance policy history
 python -m cloudguard.governance policy save my-policy.json --expected-version 1 --author alice --note "EC2 patching"
 python -m cloudguard.governance scan --mode fixture --policy-version 1
 ```
+
+## Tag recommendations
+`recommend_tags` (MCP, read-only) suggests values for a resource's missing or invalid tags, but only from evidence: alias tags on the same resource, or the operator evidence file. Every value is checked against the effective policy for the resource type. See [tag-recommendations.md](tag-recommendations.md).

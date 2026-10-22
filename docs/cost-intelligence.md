@@ -271,7 +271,7 @@ The CLI and the server both call `cloudguard/cost/service.py`, so the billing lo
 - **Credentials:** the server uses its own process credentials (the default chain, or `--profile` at startup) through `ce.make_client`.
 - **No caller-chosen context:** no tool accepts an account, profile, role, region or credentials, so an MCP client can't redirect the server.
 - **No authentication in the local server (`python -m cloudguard.server`):** whoever can reach it acts with its credentials. That's why its HTTP transport binds to localhost only.
-- **The HTTP deployment prototype (`python -m cloudguard.deploy`)** puts the same six tools behind a static bearer token (only its SHA-256 digest is configured, in `CLOUDGUARD_TOKEN_SHA256`), a `cost:read` scope, a host allow-list and a 64 KiB body limit. See `backend/deploy/lambda/README.md`. It is tested offline and on a local loopback server only. It is not deployed, and there is no OAuth.
+- **The HTTP deployment prototype (`python -m cloudguard.deploy`)** puts these six cost tools, and the governance and identity tools, behind static bearer tokens (only their SHA-256 digests are configured, in `CLOUDGUARD_TOKEN_SHA256` and the optional `CLOUDGUARD_ALEXA_TOKEN_SHA256`), per-token scopes (cost tools need `cost:read`), a host allow-list and a 64 KiB body limit. See `backend/deploy/lambda/README.md`. It is tested offline and on a local loopback server only. It is not deployed, and there is no OAuth.
 - **Not wired into the allow-list:** the Phase 4 allow-list (`governance/remediation/authz.py`) has no read permission, so cost tools don't use it yet. Server-side identity verification is still future work (`identity.py`, Phase 7).
 
 **Limitations:**

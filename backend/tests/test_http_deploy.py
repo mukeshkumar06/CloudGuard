@@ -1,7 +1,7 @@
-"""Cost MCP server over authenticated Streamable HTTP (cloudguard.deploy): bearer auth, cost:read authorization,
-host/origin checks, body limit and safe errors, exercised over ASGI exactly as Lambda Web Adapter would forward
-Function URL requests, and once over real loopback HTTP. Fixture data, or live mode with every botocore call
-mocked: nothing reaches AWS.
+"""The combined MCP server (twelve tools) over authenticated Streamable HTTP (cloudguard.deploy): bearer auth,
+scope authorization, host/origin checks, body limit and safe errors, exercised over ASGI exactly as Lambda Web
+Adapter would forward Function URL requests, and once over real loopback HTTP. Fixture data, or live mode with
+every botocore call mocked: nothing reaches AWS. The Alexa surface is covered in test_alexa_surface.py.
 """
 
 import hashlib
@@ -23,6 +23,10 @@ from cloudguard.deploy.http_app import (
     StaticTokenAuthenticator, authorize_tool, build_app, new_token, token_digest,
 )
 from cloudguard.server.cost_tools import COST_TOOL_NAMES
+from cloudguard.server.governance_tools import GOVERNANCE_TOOL_NAMES
+from cloudguard.server.identity_tools import IDENTITY_TOOL_NAMES
+
+ALL_TOOLS = set(COST_TOOL_NAMES) | set(GOVERNANCE_TOOL_NAMES) | set(IDENTITY_TOOL_NAMES)
 
 BACKEND = Path(__file__).resolve().parents[1]
 TOKEN = "c4-test-token-not-a-secret-0123456789abcdefghijk"
@@ -74,16 +78,36 @@ def test_initialize_negotiates_each_protocol_version(client, version):
     assert "mcp-session-id" not in r.headers  # stateless
 
 
-def test_exactly_the_six_cost_tools_are_listed_and_each_runs_in_fixture_mode(client):
+def test_all_twelve_tools_are_listed_and_each_runs_in_fixture_mode(client):
     tools = rpc(client, "tools/list", {}).json()["result"]["tools"]
-    assert sorted(t["name"] for t in tools) == sorted(COST_TOOL_NAMES) and len(tools) == 6
+    assert {t["name"] for t in tools} == ALL_TOOLS and len(tools) == 12
     for t in tools:
         assert t["annotations"]["readOnlyHint"] is True and t["annotations"]["destructiveHint"] is False
         assert t["inputSchema"]["additionalProperties"] is False
-    for name in COST_TOOL_NAMES:
-        result = call_tool(client, name).json()["result"]
-        assert result["isError"] is False and result["structuredContent"]["tool"] == name
-        assert result["structuredContent"]["mode"] == "fixture"
+    out = {}
+    needs_finding = ["explain_finding", "recommend_tags"]
+    for name in sorted(ALL_TOOLS - set(needs_finding)) + needs_finding:
+        finding_id = out["list_untagged_resources"]["resources"][0]["finding_id"] if name in needs_finding else None
+        args = ({"finding_id": finding_id} if name == "explain_finding"
+                else {"resource": finding_id} if name == "recommend_tags" else {})
+        result = call_tool(client, name, args).json()["result"]
+        assert result["isError"] is False, (name, result["content"])
+        out[name] = result["structuredContent"]
+        assert out[name]["tool"] == name and out[name]["mode"] == "fixture"
+
+
+@pytest.mark.parametrize("scopes,allowed", [
+    ("cost:read", set(COST_TOOL_NAMES)),
+    ("governance:read", set(GOVERNANCE_TOOL_NAMES) | set(IDENTITY_TOOL_NAMES)),
+    ("cost:read governance:read", ALL_TOOLS),
+])
+def test_scopes_decide_which_tools_are_callable(scopes, allowed):
+    with TestClient(build_app(config(CLOUDGUARD_TOKEN_SCOPES=scopes)), base_url="http://testserver") as c:
+        for name in sorted(ALL_TOOLS - {"explain_finding", "recommend_tags"}):
+            result = call_tool(c, name).json()["result"]
+            assert result["isError"] is (name not in allowed), (scopes, name)
+            if name not in allowed:
+                assert "not authorized" in result["content"][0]["text"]
 
 
 def test_results_carry_no_account_identifiers_or_credentials(client):
@@ -116,7 +140,7 @@ def test_fixture_mode_still_requires_authentication(client):
     assert rpc(client, "tools/list", {}, token=None).status_code == 401
 
 
-def test_token_without_cost_read_is_403():
+def test_token_without_any_cloudguard_scope_is_403():
     with TestClient(build_app(config(CLOUDGUARD_TOKEN_SCOPES="")), base_url="http://testserver") as c:
         r = call_tool(c, "get_monthly_aws_bill")
     assert r.status_code == 403 and r.json() == {"error": "forbidden"}
@@ -147,6 +171,12 @@ def test_weak_token_digest_is_refused_at_startup(weak):
         config(CLOUDGUARD_TOKEN_SHA256=hashlib.sha256(weak.encode()).hexdigest())
 
 
+@pytest.mark.parametrize("weak", ["", "changeme", "test-token"])
+def test_weak_alexa_token_digest_is_refused_at_startup(weak):
+    with pytest.raises(ConfigError, match="CLOUDGUARD_ALEXA_TOKEN_SHA256 is the digest of a known weak token"):
+        config(CLOUDGUARD_ALEXA_TOKEN_SHA256=hashlib.sha256(weak.encode()).hexdigest())
+
+
 @pytest.mark.parametrize("weak", ["short", "a" * 64, "0123456789" * 3])
 def test_token_digest_refuses_short_or_low_variety_tokens(weak):
     with pytest.raises(ConfigError, match="at least 32 bytes"):
@@ -170,7 +200,7 @@ def test_new_token_cli_prints_token_and_digest(capsys):
 # ---------- tool authorization ----------
 
 def test_unknown_tool_is_refused_before_lookup(client):
-    result = call_tool(client, "get_resource_inventory").json()["result"]
+    result = call_tool(client, "approve_proposal").json()["result"]
     assert result["isError"] is True and "not authorized" in result["content"][0]["text"]
 
 
@@ -264,6 +294,16 @@ def test_oversized_streamed_body_is_413(client):
     assert r.status_code == 413 and r.json() == {"error": "payload_too_large"}
 
 
+def test_alexa_token_gets_the_same_body_limit_and_its_projection_after_replay():
+    alexa = "c5-alexa-test-token-not-a-secret-0123456789abcdefghij"
+    cfg = config(CLOUDGUARD_ALEXA_TOKEN_SHA256=hashlib.sha256(alexa.encode()).hexdigest())
+    with TestClient(build_app(cfg), base_url="http://testserver") as c:
+        headers = dict(MCP_HEADERS, authorization=f"Bearer {alexa}")
+        assert c.post("/mcp", headers=headers, content=b"x" * (MAX_BODY_BYTES + 1)).status_code == 413
+        result = call_tool(c, "get_monthly_aws_bill", token=alexa).json()["result"]  # body buffered, then replayed
+    assert result["isError"] is False and "report" not in result["structuredContent"]  # Alexa projection applied
+
+
 def test_oversized_body_without_token_is_still_401(client):
     r = client.post("/mcp", headers=MCP_HEADERS, content=b"x" * (MAX_BODY_BYTES + 1))
     assert r.status_code == 401
@@ -287,8 +327,9 @@ def test_unexpected_errors_are_generic_500(caplog):
     ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_MODE": "prod"}, "fixture or live"),
     ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_AUTH_MODE": "oauth"}, "oauth is not implemented"),
     ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_AUTH_MODE": "none"}, "must be static-token"),
-    ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_TOKEN_SCOPES": "cost:read governance:read"}, "unknown scope"),
-    ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_TOKEN_SCOPES": "alexa:read"}, "unknown scope"),
+    ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_TOKEN_SCOPES": "cost:read admin"}, "unknown scope"),
+    ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_TOKEN_SCOPES": "alexa:read cost:read"}, "can't be combined"),
+    ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_ALEXA_TOKEN_SHA256": DIGEST}, "must differ"),
     ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_TOKEN_SUBJECT": "bad subject"}, "CLOUDGUARD_TOKEN_SUBJECT"),
     ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_ALLOWED_HOSTS": "*"}, "invalid allowed host"),
     ({"CLOUDGUARD_TOKEN_SHA256": DIGEST, "CLOUDGUARD_ALLOWED_HOSTS": "*:*"}, "invalid allowed host"),
@@ -314,14 +355,10 @@ def test_deploy_entry_refuses_bad_configuration(monkeypatch, capsys):
     assert entry.main([]) == 2 and "configuration error" in capsys.readouterr().err
 
 
-def test_fixture_app_imports_no_boto3_and_no_later_phase_modules():
+def test_fixture_app_imports_no_boto3():
     script = ("import sys\nfrom cloudguard.deploy.http_app import build_app, DeployConfig\n"
               f"build_app(DeployConfig.from_env({{'CLOUDGUARD_TOKEN_SHA256': '{DIGEST}'}}))\n"
-              "assert 'boto3' not in sys.modules\n"
-              "bad = [m for m in sys.modules if m.startswith(('cloudguard.server.governance_tools', "
-              "'cloudguard.server.identity_tools', 'cloudguard.deploy.alexa_projection', "
-              "'cloudguard.governance.recommendations'))]\n"
-              "assert not bad, bad\nprint('OK')")
+              "assert 'boto3' not in sys.modules\nprint('OK')")
     proc = subprocess.run([sys.executable, "-B", "-c", script], cwd=BACKEND, capture_output=True, text=True,
                           timeout=120)
     assert proc.returncode == 0 and "OK" in proc.stdout, proc.stderr
@@ -412,7 +449,7 @@ def test_streamable_http_client_over_loopback():
                     result = await session.call_tool("get_monthly_aws_bill", {})
                     return init, tools, result
         init, tools, result = anyio.run(run, TOKEN)
-        assert init.protocolVersion == "2025-11-25" and sorted(t.name for t in tools) == sorted(COST_TOOL_NAMES)
+        assert init.protocolVersion == "2025-11-25" and {t.name for t in tools} == ALL_TOOLS
         assert result.isError is False and result.structuredContent["tool"] == "get_monthly_aws_bill"
         assert result.structuredContent["speech"] and result.structuredContent["report"]
         with pytest.raises(Exception):

@@ -1,32 +1,40 @@
-"""ASGI app for running the CloudGuard cost MCP server behind AWS Lambda Web Adapter (PROTOTYPE).
+"""ASGI app for running the existing CloudGuard MCP server behind AWS Lambda Web Adapter (PROTOTYPE).
 
 Lambda Web Adapter starts a normal HTTP server inside the function and forwards each Function URL request
 to it, so the server needs no Lambda-specific code: this module only adds what a remote endpoint needs.
-It registers no tools of its own: the six cost tools come from cloudguard.server.app.create_server.
+It registers no tools of its own: all twelve (six cost, five governance, one identity) come from
+cloudguard.server.app.create_server.
 
-Two separate concerns, plus AWS IAM:
+Three separate concerns:
 
 1. Caller authentication (here, before anything reaches MCP). An `Authenticator` turns the Authorization
    header into a `Principal` or refuses it. The only implementation is a static bearer token: the server
    holds its SHA-256 (CLOUDGUARD_TOKEN_SHA256), never the token, and compares digests in constant time.
    Tokens must be random and at least 32 bytes (`python -m cloudguard.deploy --new-token` makes one). Only
    the digest is configured, so the server can't measure a token's strength; it refuses the digests of
-   known weak tokens. OAuth 2.1 (Alexa+ account linking) is NOT implemented: CLOUDGUARD_AUTH_MODE=oauth is
-   refused at startup rather than faked, and /.well-known/oauth-protected-resource answers 404.
-   Missing or invalid credentials: 401 with `WWW-Authenticate: Bearer`. A valid caller without the
-   "cost:read" scope: 403 (error="insufficient_scope").
-2. Tool authorization (in the MCP server, before argument handling or tool code). Each cost tool needs
-   "cost:read". Unknown tools and requests without a principal are refused as tool errors.
-3. AWS IAM (the Lambda execution role). Decides which AWS calls the process can make; every cost tool is
-   read-only. No tool argument can name an account, role, profile, region or credentials.
+   known weak tokens. OAuth 2.1 (Alexa+ account linking) is NOT implemented: it needs an authorization server whose issuer,
+   token validation keys and audience are not available yet, so CLOUDGUARD_AUTH_MODE=oauth is refused
+   at startup rather than faked, and /.well-known/oauth-protected-resource answers 404.
+   Missing or invalid credentials: 401 with `WWW-Authenticate: Bearer`. A valid caller with no CloudGuard
+   scope: 403 (error="insufficient_scope").
+2. Tool authorization (in the MCP server, before argument handling or tool code). Each tool needs a
+   scope: cost tools "cost:read", governance tools and get_aws_account_identity "governance:read". A call without it is refused as a
+   tool error. Unknown tools and requests without a principal are refused.
+   Alexa surface: a principal holding "alexa:read" may call exactly the tools in ALEXA_TOOLS (an explicit
+   list of read-only tools, never derived from what is registered) and nothing else. "alexa:read" can't be
+   combined with other scopes, so an Alexa token is never also an operator token. tools/list is filtered by
+   the same check; tools/call re-checks every call on its own. Startup fails if an Alexa tool is missing
+   or not annotated read-only.
+3. AWS IAM (the Lambda execution role). Decides which AWS calls the process can make; every CloudGuard
+   tool is read-only. No tool argument can name an account, role, profile, region or credentials.
 
-Authentication happens before any AWS call: startup makes none (live mode only builds the Cost Explorer
-client), and only tool calls reach AWS.
+Authentication happens before any AWS call: startup makes none (live mode builds AWS clients only, and
+lists enabled regions on the first governance scan), and only tool calls reach AWS.
 
-Also: host and origin validation stays on (the MCP SDK's DNS-rebinding protection with an explicit
-allow-list, CLOUDGUARD_ALLOWED_HOSTS); request bodies over MAX_BODY_BYTES answer 413; GET /healthz for the
-adapter's readiness check (no auth, no AWS call, no account data); one JSON log line per request (method,
-path, status, auth outcome, caller subject, duration; never headers, bodies or the token); unexpected errors
+Also: host validation stays on (the MCP SDK's DNS-rebinding protection with an explicit allow-list,
+CLOUDGUARD_ALLOWED_HOSTS); request bodies over MAX_BODY_BYTES answer 413; GET /healthz for the adapter's
+readiness check (no auth, no AWS call, no account data); one JSON log line per request (method, path,
+status, auth outcome, caller subject, duration; never headers, bodies or the token); unexpected errors
 answer 500 with no details. There is no request timeout here: the Lambda function timeout bounds a request.
 
 Environment:
@@ -35,9 +43,14 @@ Environment:
     CLOUDGUARD_AUTH_MODE      static-token (default; the only implemented mode)
     CLOUDGUARD_TOKEN_SHA256   hex SHA-256 of the bearer token (required)
     CLOUDGUARD_TOKEN_SUBJECT  name recorded for the token's caller in logs (default: static-token)
-    CLOUDGUARD_TOKEN_SCOPES   space- or comma-separated scopes of the token (default: cost:read)
+    CLOUDGUARD_TOKEN_SCOPES   space- or comma-separated scopes of the token (default: cost:read governance:read)
+    CLOUDGUARD_ALEXA_TOKEN_SHA256  optional hex SHA-256 of a second bearer token for the Alexa client; its
+                              caller is subject "alexa" with only the "alexa:read" scope. Must differ from
+                              CLOUDGUARD_TOKEN_SHA256. Still a static token: OAuth account linking is not done.
     CLOUDGUARD_ALLOWED_HOSTS  comma-separated Host values, each "name" or "name:port" or "name:*"
                               (default: 127.0.0.1:*,localhost:*,[::1]:*)
+    CLOUDGUARD_POLICY_STORE   local tagging-policy directory, read only (default: .cloudguard/policies under
+                              the working directory; when absent the built-in default policy is used)
 """
 
 from __future__ import annotations
@@ -52,23 +65,37 @@ import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from mcp.server.transport_security import TransportSecuritySettings
 
 from cloudguard.server.app import PRINCIPAL_SCOPE_KEY, create_server
-from cloudguard.server.context import CostContext
+from cloudguard.server.context import POLICY_DIR, CostContext, GovernanceContext
 from cloudguard.server.cost_tools import COST_TOOL_NAMES
+from cloudguard.deploy import alexa_projection
+from cloudguard.server.governance_tools import GOVERNANCE_TOOL_NAMES, redact
+from cloudguard.server.identity_tools import IDENTITY_TOOL_NAMES, IdentityContext
 
 log = logging.getLogger("cloudguard.deploy")
 
 LOCAL_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
 HEALTH_PATH = "/healthz"
 OAUTH_METADATA_PATH = "/.well-known/oauth-protected-resource"
-COST_SCOPE = "cost:read"
-KNOWN_SCOPES = frozenset({COST_SCOPE})
-DEFAULT_SCOPES = frozenset({COST_SCOPE})
-TOOL_SCOPES = {t: COST_SCOPE for t in COST_TOOL_NAMES}
+COST_SCOPE, GOVERNANCE_SCOPE, ALEXA_SCOPE = "cost:read", "governance:read", "alexa:read"
+KNOWN_SCOPES = frozenset({COST_SCOPE, GOVERNANCE_SCOPE, ALEXA_SCOPE})
+DEFAULT_SCOPES = frozenset({COST_SCOPE, GOVERNANCE_SCOPE})
+ALEXA_SUBJECT = "alexa"
+# The Alexa-facing surface: explicit, read-only tools only. Proposal, approval, revocation, abort and execution
+# tools must never be added here.
+ALEXA_TOOLS = frozenset({
+    "get_monthly_aws_bill", "get_current_month_spending", "get_cost_breakdown", "compare_monthly_costs",
+    "investigate_cost_increase", "get_cost_anomalies",
+    "get_resource_inventory", "scan_tag_compliance", "list_untagged_resources", "explain_finding", "recommend_tags",
+    "get_aws_account_identity",
+})
+TOOL_SCOPES = {**{t: COST_SCOPE for t in COST_TOOL_NAMES}, **{t: GOVERNANCE_SCOPE for t in GOVERNANCE_TOOL_NAMES},
+               **{t: GOVERNANCE_SCOPE for t in IDENTITY_TOOL_NAMES}}
 # A JSON-RPC request to these tools is a few hundred bytes; 64 KiB leaves ample room. The MCP SDK's own
 # limit (4 MiB) still applies behind this one.
 MAX_BODY_BYTES = 64 * 1024
@@ -110,6 +137,8 @@ class DeployConfig:
     allowed_hosts: tuple[str, ...]
     token_subject: str = "static-token"
     token_scopes: frozenset[str] = DEFAULT_SCOPES
+    policy_dir: Path | None = POLICY_DIR
+    alexa_token_sha256: bytes | None = None
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DeployConfig:
@@ -139,13 +168,29 @@ class DeployConfig:
         if unknown := scopes - KNOWN_SCOPES:
             raise ConfigError(f"unknown scope(s) in CLOUDGUARD_TOKEN_SCOPES: {sorted(unknown)}; "
                               f"expected {sorted(KNOWN_SCOPES)}")
+        if ALEXA_SCOPE in scopes and scopes != {ALEXA_SCOPE}:
+            raise ConfigError("alexa:read can't be combined with other scopes: an Alexa token is never an "
+                              "operator token")
+        alexa_digest = env.get("CLOUDGUARD_ALEXA_TOKEN_SHA256", "").strip().lower() or None
+        if alexa_digest is not None:
+            if not _SHA256_HEX.match(alexa_digest):
+                raise ConfigError("CLOUDGUARD_ALEXA_TOKEN_SHA256 must be the 64-character hex SHA-256 of the "
+                                  "Alexa bearer token")
+            if alexa_digest == digest:
+                raise ConfigError("CLOUDGUARD_ALEXA_TOKEN_SHA256 must differ from CLOUDGUARD_TOKEN_SHA256")
+            if alexa_digest in WEAK_DIGESTS:
+                raise ConfigError("CLOUDGUARD_ALEXA_TOKEN_SHA256 is the digest of a known weak token; generate a "
+                                  "random one with `python -m cloudguard.deploy --new-token`")
         raw_hosts = env.get("CLOUDGUARD_ALLOWED_HOSTS", "")
         hosts = tuple(h.strip() for h in raw_hosts.split(",") if h.strip()) or LOCAL_HOSTS
         for host in hosts:
             if host in ("*", "*:*") or not _HOST.match(host):
                 raise ConfigError(f"invalid allowed host {host!r}: use name, name:port or name:*")
+        store = env.get("CLOUDGUARD_POLICY_STORE")
         return cls(mode=mode, fixture=env.get("CLOUDGUARD_FIXTURE") or None, token_sha256=bytes.fromhex(digest),
-                   allowed_hosts=hosts, token_subject=subject, token_scopes=scopes)
+                   allowed_hosts=hosts, token_subject=subject, token_scopes=scopes,
+                   policy_dir=Path(store) if store else POLICY_DIR,
+                   alexa_token_sha256=bytes.fromhex(alexa_digest) if alexa_digest else None)
 
 
 # ---------- 1. authentication ----------
@@ -166,11 +211,14 @@ class Authenticator(Protocol):
 
 
 class StaticTokenAuthenticator:
-    """An operator-issued bearer token, checked against its SHA-256 digest in constant time."""
+    """Operator-issued bearer tokens, each checked against its SHA-256 digest in constant time.
 
-    def __init__(self, token_sha256: bytes, subject: str, scopes: frozenset[str]):
-        self._digest = token_sha256
-        self._principal = Principal(subject, scopes, "static-token")
+    The main token, plus optional `extra` (digest, Principal) pairs such as the Alexa token. Every digest is
+    compared, so timing doesn't reveal which token matched."""
+
+    def __init__(self, token_sha256: bytes, subject: str, scopes: frozenset[str],
+                 extra: tuple[tuple[bytes, Principal], ...] = ()):
+        self._tokens = ((token_sha256, Principal(subject, scopes, "static-token")), *extra)
 
     def authenticate(self, authorization: str | None) -> Principal | str:
         if authorization is None:
@@ -179,17 +227,68 @@ class StaticTokenAuthenticator:
         if scheme.lower() != "bearer" or not token.strip():
             return "invalid"
         supplied = hashlib.sha256(token.strip().encode()).digest()
-        return self._principal if hmac.compare_digest(supplied, self._digest) else "invalid"
+        found: Principal | str = "invalid"
+        for digest, principal in self._tokens:
+            if hmac.compare_digest(supplied, digest):
+                found = principal
+        return found
 
 
 # ---------- 2. tool authorization ----------
 
 def authorize_tool(principal: object, tool: str) -> bool:
-    """Allow a tool call only for an authenticated Principal holding the tool's scope. Fails closed."""
+    """Allow a tool call only for an authenticated Principal holding the tool's scope. Fails closed.
+
+    An Alexa principal (alexa:read) may call only ALEXA_TOOLS, whatever else is registered."""
     if not isinstance(principal, Principal):
         return False
+    if ALEXA_SCOPE in principal.scopes:
+        return tool in ALEXA_TOOLS and tool in TOOL_SCOPES
     required = TOOL_SCOPES.get(tool)
     return required is not None and required in principal.scopes
+
+
+def visible_tool(principal: object, tool: str) -> bool:
+    """tools/list filter: an Alexa principal sees only what it may call; other callers' listing is unchanged."""
+    if isinstance(principal, Principal) and ALEXA_SCOPE in principal.scopes:
+        return authorize_tool(principal, tool)
+    return True
+
+
+_INPUT_ECHO = re.compile(r"input_value=.*?(?=, input_type|\]|$)", re.S)
+
+
+class AlexaProjection:
+    """The Alexa response boundary: an alexa:read principal gets cloudguard.deploy.alexa_projection's answers,
+    never the operator results, and sanitized error text. Other principals are untouched."""
+
+    def applies(self, principal: object) -> bool:
+        return isinstance(principal, Principal) and ALEXA_SCOPE in principal.scopes
+
+    def project(self, tool: str, structured: dict) -> dict:
+        return alexa_projection.project(tool, structured)
+
+    def output_schema(self, tool: str) -> dict | None:
+        return alexa_projection.output_schema(tool)
+
+    def error_message(self, tool: str, message: str) -> str:
+        if message.startswith("not authorized to call "):
+            return message[:100]
+        if "validation error" in message.lower() or "does not accept argument" in message:
+            return f"invalid arguments for {tool[:64]}"  # never echo the caller's input back
+        return redact(_INPUT_ECHO.sub("", message), 200)
+
+
+def check_alexa_surface(server) -> None:
+    """Refuse to start unless every Alexa tool is registered and annotated read-only and non-destructive."""
+    tools = {t.name: t for t in server._tool_manager.list_tools()}
+    for name in sorted(ALEXA_TOOLS):
+        if alexa_projection.output_schema(name) is None:
+            raise ConfigError(f"Alexa tool {name} has no Alexa response projection")
+        tool = tools.get(name)
+        ann = tool.annotations if tool else None
+        if ann is None or ann.readOnlyHint is not True or ann.destructiveHint is not False:
+            raise ConfigError(f"Alexa tool {name} is missing or not annotated read-only")
 
 
 # ---------- HTTP ----------
@@ -307,19 +406,31 @@ class BearerAuthApp:
                                  "duration_ms": round((time.perf_counter() - started) * 1000, 1)}))
 
 
-def build_context(config: DeployConfig) -> CostContext:
-    """Fixture data, or a live context that makes no AWS call until an authorized tool runs."""
-    return CostContext.live() if config.mode == "live" else CostContext.fixture(config.fixture)
+def build_contexts(config: DeployConfig) -> tuple[CostContext, GovernanceContext]:
+    """Fixture data, or live contexts that make no AWS call until an authorized tool runs."""
+    if config.mode == "live":
+        return CostContext.live(), GovernanceContext.live_deferred(policy_dir=config.policy_dir)
+    return CostContext.fixture(config.fixture), GovernanceContext.fixture(policy_dir=config.policy_dir)
 
 
-def build_app(config: DeployConfig | None = None, *, context: CostContext | None = None):
-    """The six cost tools behind authentication, tool authorization, a body limit and a host allow-list.
+def build_app(config: DeployConfig | None = None, *,
+              contexts: tuple[CostContext, GovernanceContext] | None = None,
+              identity: IdentityContext | None = None):
+    """All twelve MCP tools behind authentication, tool authorization and a host allow-list.
 
-    `context` replaces the context built from `config` (tests and embedding only).
+    `contexts` and `identity` replace the contexts built from `config` (tests and embedding only). Without
+    `identity`, the identity context follows the cost context's mode; live mode calls STS only inside the tool.
     """
     config = config or DeployConfig.from_env()
-    server = create_server(context or build_context(config), authorizer=authorize_tool)
+    cost, governance = contexts or build_contexts(config)
+    if identity is None:
+        identity = IdentityContext.live() if cost.mode == "live" else IdentityContext.fixture()
+    server = create_server(cost, governance, identity, authorizer=authorize_tool, tool_filter=visible_tool,
+                           projection=AlexaProjection())
+    check_alexa_surface(server)
     # Must be set before streamable_http_app() builds the session manager, which reads it once.
     server.settings.transport_security = transport_security(config.allowed_hosts)
-    authenticator = StaticTokenAuthenticator(config.token_sha256, config.token_subject, config.token_scopes)
+    extra = (((config.alexa_token_sha256, Principal(ALEXA_SUBJECT, frozenset({ALEXA_SCOPE}), "static-token")),)
+             if config.alexa_token_sha256 else ())
+    authenticator = StaticTokenAuthenticator(config.token_sha256, config.token_subject, config.token_scopes, extra)
     return BearerAuthApp(server.streamable_http_app(), authenticator, config.mode)
