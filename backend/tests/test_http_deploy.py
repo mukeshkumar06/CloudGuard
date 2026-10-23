@@ -1,4 +1,4 @@
-"""The combined MCP server (twelve tools) over authenticated Streamable HTTP (cloudguard.deploy): bearer auth,
+"""The combined MCP server (fourteen tools) over authenticated Streamable HTTP (cloudguard.deploy): bearer auth,
 scope authorization, host/origin checks, body limit and safe errors, exercised over ASGI exactly as Lambda Web
 Adapter would forward Function URL requests, and once over real loopback HTTP. Fixture data, or live mode with
 every botocore call mocked: nothing reaches AWS. The Alexa surface is covered in test_alexa_surface.py.
@@ -68,6 +68,9 @@ def initialize(client, version="2025-11-25"):
 def call_tool(client, name, arguments=None, **kw):
     return rpc(client, "tools/call", {"name": name, "arguments": arguments or {}}, **kw)
 
+# Tools whose required arguments have no default (everything else is called with {}).
+REQUIRED_ARGS = {"search_resources": {"text": "e"}, "preview_tag_changes": {"tags": {"Team": "x"}, "service": "lambda"}}
+
 
 # ---------- MCP over the adapter-facing HTTP interface ----------
 
@@ -78,9 +81,9 @@ def test_initialize_negotiates_each_protocol_version(client, version):
     assert "mcp-session-id" not in r.headers  # stateless
 
 
-def test_all_twelve_tools_are_listed_and_each_runs_in_fixture_mode(client):
+def test_all_fourteen_tools_are_listed_and_each_runs_in_fixture_mode(client):
     tools = rpc(client, "tools/list", {}).json()["result"]["tools"]
-    assert {t["name"] for t in tools} == ALL_TOOLS and len(tools) == 12
+    assert {t["name"] for t in tools} == ALL_TOOLS and len(tools) == 14
     for t in tools:
         assert t["annotations"]["readOnlyHint"] is True and t["annotations"]["destructiveHint"] is False
         assert t["inputSchema"]["additionalProperties"] is False
@@ -89,7 +92,7 @@ def test_all_twelve_tools_are_listed_and_each_runs_in_fixture_mode(client):
     for name in sorted(ALL_TOOLS - set(needs_finding)) + needs_finding:
         finding_id = out["list_untagged_resources"]["resources"][0]["finding_id"] if name in needs_finding else None
         args = ({"finding_id": finding_id} if name == "explain_finding"
-                else {"resource": finding_id} if name == "recommend_tags" else {})
+                else {"resource": finding_id} if name == "recommend_tags" else REQUIRED_ARGS.get(name, {}))
         result = call_tool(client, name, args).json()["result"]
         assert result["isError"] is False, (name, result["content"])
         out[name] = result["structuredContent"]
@@ -104,8 +107,8 @@ def test_all_twelve_tools_are_listed_and_each_runs_in_fixture_mode(client):
 def test_scopes_decide_which_tools_are_callable(scopes, allowed):
     with TestClient(build_app(config(CLOUDGUARD_TOKEN_SCOPES=scopes)), base_url="http://testserver") as c:
         for name in sorted(ALL_TOOLS - {"explain_finding", "recommend_tags"}):
-            result = call_tool(c, name).json()["result"]
-            assert result["isError"] is (name not in allowed), (scopes, name)
+            result = call_tool(c, name, REQUIRED_ARGS.get(name, {})).json()["result"]
+            assert result["isError"] is (name not in allowed), (scopes, name, result["content"])
             if name not in allowed:
                 assert "not authorized" in result["content"][0]["text"]
 

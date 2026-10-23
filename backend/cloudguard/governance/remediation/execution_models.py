@@ -13,7 +13,7 @@ from __future__ import annotations
 from datetime import datetime
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from cloudguard.governance.custom_tagging.models import ChangeAction
 from cloudguard.governance.remediation.models import (
@@ -184,6 +184,16 @@ class ExecutionRecord(_Frozen):
     idempotency_key: str
     request_fingerprint: str
     intended_resources: list[str]  # CHANGE_PROPOSED ARNs of the stored proposal, in order
+    # Copied from an approval made under a PersonalAccountWaiver (personal voice tagging): the one person may also
+    # execute. Omitted from serialization when unset, so every other record's form and hash are unchanged.
+    separation_waived: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_waiver(self, handler):
+        data = handler(self)
+        if data.get("separation_waived") is None:
+            data.pop("separation_waived", None)
+        return data
 
     @field_validator("started_at", "approval_expires_at")
     @classmethod
@@ -191,15 +201,16 @@ class ExecutionRecord(_Frozen):
         return _utc(v)
 
     @model_validator(mode="after")
-    def _fixture_only(self) -> ExecutionRecord:
+    def _consistent(self) -> ExecutionRecord:
         if not self.started_at < self.approval_expires_at:
             raise ValueError("an execution must start before its approval expires")
-        if self.executor_identity.person_id == self.approver_identity.person_id:
+        if self.executor_identity.person_id == self.approver_identity.person_id and not self.separation_waived:
             raise ValueError("separation of duties: the executor must not be the approver")
         if self.schema_version != EXECUTION_SCHEMA:
             raise ValueError("unsupported execution schema")
-        if self.mode != OperatingMode.FIXTURE:
-            raise ValueError("Checkpoint 4.3 records fixture executions only")
+        # Checkpoint 5: a LIVE execution only ever records AWS-authenticated people on both sides.
+        if self.mode == OperatingMode.LIVE and not (self.requested_by.authenticated and self.approver.authenticated):
+            raise ValueError("a live execution needs AWS-authenticated requester and approver")
         if not self.intended_resources or len(set(self.intended_resources)) != len(self.intended_resources):
             raise ValueError("intended resources must be non-empty and unique")
         return self

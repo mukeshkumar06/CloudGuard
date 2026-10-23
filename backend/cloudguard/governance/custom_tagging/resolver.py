@@ -67,9 +67,22 @@ def resolve(target: TargetCriteria, discovery: DiscoveryResult) -> Resolution:
         pool = [r for r in pool if r.region in (target.region, UNRESOLVED_REGION)]
 
     if target.all_of_type:
+        if target.arns is not None:
+            # An explicit selection: every ARN must be a discovered resource in scope, or nothing is proposed.
+            by_arn = {r.resource_arn: r for r in pool}
+            missing = [a for a in target.arns if a not in by_arn]
+            if missing:
+                return Resolution(ResolutionStatus.NOT_FOUND,
+                                  message=f"{len(missing)} selected resource(s) were not found in scope: "
+                                          f"{', '.join(missing[:5])}")
+            pool = [by_arn[a] for a in target.arns]
+        if target.name_filter is not None:
+            pool = [r for r in pool if target.name_filter.matches(r.resource_name)]
+        what = target.resource_type or "matching"
         if not pool:
             where = f" in {target.region}" if target.region else ""
-            return Resolution(ResolutionStatus.NOT_FOUND, message=f"no {target.resource_type} resources found{where}")
+            named = f" whose names {target.name_filter.match.replace('_', ' ')} the given text" if target.name_filter else ""
+            return Resolution(ResolutionStatus.NOT_FOUND, message=f"no {what} resources{named} found{where}")
         return Resolution(ResolutionStatus.RESOLVED, resources=pool, out_of_scope=excluded_by_region)
 
     if target.arn:

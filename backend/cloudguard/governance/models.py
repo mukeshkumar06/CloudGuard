@@ -24,6 +24,7 @@ class ErrorKind(StrEnum):
     THROTTLED = "THROTTLED"
     NOT_FOUND = "NOT_FOUND"
     SERVICE_UNAVAILABLE = "SERVICE_UNAVAILABLE"
+    TIMEOUT = "TIMEOUT"  # discovery did not finish within its deadline; results for that service are incomplete
     UNKNOWN = "UNKNOWN"
 
 

@@ -7,8 +7,17 @@ from botocore.exceptions import BotoCoreError, ClientError, EndpointConnectionEr
 
 from cloudguard.governance.models import ErrorKind, InspectionError
 
-# Standard retry mode backs off on throttling and transient 5xx before we give up on a call.
-BOTO_CONFIG = Config(retries={"mode": "standard", "max_attempts": 5}, user_agent_extra="cloudguard-ai")
+# Standard retry mode backs off on throttling and transient 5xx before we give up on a call. Explicit timeouts
+# (botocore's defaults are 60 s each) keep one slow endpoint from holding a discovery task past its deadline.
+BOTO_CONFIG = Config(retries={"mode": "standard", "max_attempts": 5}, connect_timeout=5, read_timeout=15,
+                     user_agent_extra="cloudguard-ai")
+
+# Single calls that run before discovery's tasks start (sts:GetCallerIdentity, ec2:DescribeRegions on a live
+# server's first scan). botocore's max_attempts counts retries after the first try, so this is 2 attempts: worst
+# case about 2 x (3 + 5) s plus a short backoff. With DISCOVERY_DEADLINE_SECONDS, a first live scan stays under the
+# simulator's 60-second call timeout.
+SINGLE_CALL_CONFIG = Config(retries={"mode": "standard", "max_attempts": 1}, connect_timeout=3, read_timeout=5,
+                            user_agent_extra="cloudguard-ai")
 
 AWS_ERRORS = (ClientError, BotoCoreError)
 

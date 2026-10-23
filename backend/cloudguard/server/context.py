@@ -3,8 +3,9 @@
 Live mode uses the server process's own AWS credentials (the default chain, or the profile named on the
 command line when the server starts) through the existing read-only Cost Explorer client and the
 read-only governance discovery. Governance scans cover every region enabled for the account, listed
-once with ec2:DescribeRegions at startup. No tool can name an account, profile, role or region, so an
-MCP client can't redirect the server to another AWS account. Fixture mode uses synthetic data and never
+once with ec2:DescribeRegions at startup. get_resource_inventory can narrow a scan to some of those
+regions and services, never widen it; no tool can name an account, profile or role, so an MCP client
+can't redirect the server to another AWS account or to a region outside the enabled list. Fixture mode uses synthetic data and never
 imports boto3.
 
 Trust boundary: there is no MCP-level authentication yet. Anyone who can reach the server acts with the
@@ -22,7 +23,7 @@ from typing import Literal
 from cloudguard.cost.ce import CE_REGION
 from cloudguard.cost.fixture import FixtureCostExplorer
 from cloudguard.governance.discovery import DiscoverySource, FixtureSource, LiveSource
-from cloudguard.governance.discovery.common import BOTO_CONFIG
+from cloudguard.governance.discovery.common import SINGLE_CALL_CONFIG
 from cloudguard.governance.policy import DEFAULT_POLICY_DOCUMENT, DEFAULT_POLICY_ID, PolicyVersion
 from cloudguard.governance.policy_store import LocalPolicyStore, PolicyManager
 
@@ -75,15 +76,15 @@ class DeferredLiveSource:
         self._session_factory = session_factory
         self._source: LiveSource | None = None
 
-    def discover(self):
+    def discover(self, regions: list[str] | None = None, services: list[str] | None = None):
         if self._source is None:
             session = self._session_factory()
             home = getattr(session, "region_name", None) or "us-east-1"
-            regions = enabled_regions(session.client("ec2", region_name=home, config=BOTO_CONFIG))
-            if not regions:
+            enabled = enabled_regions(session.client("ec2", region_name=home, config=SINGLE_CALL_CONFIG))
+            if not enabled:
                 raise RuntimeError("ec2:DescribeRegions returned no enabled regions")
-            self._source = LiveSource(session, regions)
-        return self._source.discover()
+            self._source = LiveSource(session, enabled)
+        return self._source.discover(regions=regions, services=services)
 
 
 @dataclass(frozen=True)
@@ -130,7 +131,7 @@ class GovernanceContext:
             import boto3  # live mode only
             session = boto3.Session(profile_name=profile)
         home = getattr(session, "region_name", None) or "us-east-1"
-        regions = enabled_regions(session.client("ec2", region_name=home, config=BOTO_CONFIG))
+        regions = enabled_regions(session.client("ec2", region_name=home, config=SINGLE_CALL_CONFIG))
         if not regions:
             raise RuntimeError("ec2:DescribeRegions returned no enabled regions")
         return cls(mode="live", source=LiveSource(session, regions), regions=tuple(regions), policy_dir=policy_dir,

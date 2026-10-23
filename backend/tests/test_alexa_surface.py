@@ -1,5 +1,5 @@
 """The Alexa-facing MCP surface of the deployment prototype: an `alexa:read` principal may list and call exactly
-the twelve read-only tools in ALEXA_TOOLS. Fixture data, or live mode with every botocore call mocked."""
+the fourteen read-only tools in ALEXA_TOOLS. Fixture data, or live mode with every botocore call mocked."""
 
 import hashlib
 import json
@@ -21,7 +21,8 @@ from test_lambda_prototype import DIGEST, MCP_HEADERS, TOKEN, aws_calls, call_to
 
 ALEXA_TOKEN = "alexa-test-token-not-a-secret-987654"
 ALEXA_DIGEST = hashlib.sha256(ALEXA_TOKEN.encode()).hexdigest()
-ELEVEN = set(COST_TOOL_NAMES) | set(GOVERNANCE_TOOL_NAMES) | set(IDENTITY_TOOL_NAMES)  # now twelve
+# Every registered tool: fourteen read-only tools, including the tagging preview (a dry run that stores nothing).
+ELEVEN = set(COST_TOOL_NAMES) | set(GOVERNANCE_TOOL_NAMES) | set(IDENTITY_TOOL_NAMES)
 INTERNAL = ("approve_fix", "propose_fix", "execute_remediation")
 DEMO_NAMES = ("checkout-api-handler", "legacy-report-generator", "orders", "acme-marketing-uploads",
               "batch-worker-1", "acme-finance-archive", "nightly-etl", "audit-events")
@@ -58,8 +59,8 @@ def refused(c, name, token, args=None):
 
 # ---------- allowlist ----------
 
-def test_allowlist_is_exactly_the_twelve_read_only_tools():
-    assert ALEXA_TOOLS == ELEVEN and len(ALEXA_TOOLS) == 12
+def test_allowlist_is_exactly_the_fourteen_read_only_tools():
+    assert ALEXA_TOOLS == ELEVEN and len(ALEXA_TOOLS) == 14
     assert not any(w in t for t in ALEXA_TOOLS for w in ("propose", "approve", "revoke", "abort", "execute"))
 
 
@@ -70,10 +71,10 @@ def test_startup_refuses_a_missing_or_writable_alexa_tool():
 
 # ---------- discovery ----------
 
-def test_alexa_lists_all_twelve_and_no_internal_tool(probes):
+def test_alexa_lists_all_fourteen_and_no_internal_tool(probes):
     with TestClient(build_app(alexa_config()), base_url="http://testserver") as c:
         assert listed(c, ALEXA_TOKEN) == ELEVEN
-        assert listed(c, TOKEN) == ELEVEN | set(INTERNAL)  # operator listing is unchanged (unfiltered)
+        assert listed(c, TOKEN) == ELEVEN | set(INTERNAL)  # operator listing is unfiltered
     assert probes == []
 
 
@@ -104,7 +105,9 @@ def test_alexa_can_call_every_allowed_tool_with_speech_safe_results():
             "resources"][0]["finding_id"]
         for name in sorted(ALEXA_TOOLS):
             args = ({"finding_id": fid} if name == "explain_finding" else
-                    {"resource": fid} if name == "recommend_tags" else {})
+                    {"resource": fid} if name == "recommend_tags" else
+                    {"text": "e"} if name == "search_resources" else
+                    {"tags": {"Owner": "team-a"}, "service": "lambda"} if name == "preview_tag_changes" else {})
             result = call_tool(c, name, args, token=ALEXA_TOKEN).json()["result"]
             assert result["isError"] is False, (name, result["content"])
             out = result["structuredContent"]

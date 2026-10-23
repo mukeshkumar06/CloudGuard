@@ -14,6 +14,12 @@ DecisionService is the only way to create, approve, reject or revoke a stored pr
   (unresolved principals fail closed) and records IdentityEvidence. Separation of duties compares
   people, not principals: in LIVE the approver must differ from the requester (also in FIXTURE when
   fixture_approver_must_differ_from_requester is set; off by default, so fixture self-approval works).
+- Personal single-operator accounts: a DecisionService built with a PersonalAccountWaiver for one account (only
+  cloudguard.voice_tagging does, after checking its enable flag, its account allow-list and the STS caller) lets the
+  one allow-listed person request, approve and execute in that account. Everything else still applies (identity,
+  allow-list permissions, content hash, nonce, overwrite acknowledgement, expiry, policy, account match), and the
+  decision records that the waiver was used. No CLI path builds a waiver, so team and production accounts keep
+  full separation of duties.
 - ABORT (Batch 2 / M1) stops an EXECUTING proposal: it needs the 'reject' permission, is bound to
   the running execution id, revokes the execution lease (new token, released) so no executor can
   record or announce another write, and closes the execution's audit chain - all in one write.
@@ -63,6 +69,19 @@ DECISION_SCOPE = "proposal-decision"
 NONCE_RETENTION = timedelta(days=7)  # outlives every approval (<= 15 min) it protects
 
 
+class PersonalAccountWaiver(BaseModel):
+    """Separation of duties waived for exactly one personal development account, in one mode (see the docstring)."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    account_id: str
+    mode: OperatingMode
+    reason: str = "personal single-operator voice tagging"
+
+    def covers(self, account_id: str, mode: OperatingMode) -> bool:
+        return account_id == self.account_id and mode == self.mode
+
+
 class AuthorizationError(PermissionError):
     pass
 
@@ -102,7 +121,7 @@ def new_nonce() -> str:
 
 class DecisionService:
     def __init__(self, proposals: ProposalManager, authz: AuthzManager, identity: IdentityProvider,
-                 clock: Callable[[], datetime] | None = None):
+                 clock: Callable[[], datetime] | None = None, waiver: PersonalAccountWaiver | None = None):
         if proposals.policy_manager is None:  # L1: decisions and executions must always validate the policy
             raise ValueError("DecisionService requires a ProposalManager with a policy_manager; "
                              "policy validation can't be skipped")
@@ -111,6 +130,11 @@ class DecisionService:
         self.identity = identity
         self.mode = identity.mode
         self.clock = clock or proposals.clock
+        self.waiver = waiver
+
+    def waived(self, account_id: str) -> bool:
+        """True only for the one personal account this service was built for (never by default)."""
+        return self.waiver is not None and self.waiver.covers(account_id, self.mode)
 
     def _principal(self):
         principal = self.identity.current()
@@ -273,7 +297,7 @@ class DecisionService:
                 # to one person, except a session_attributed_role, which exists to tell people apart.
             separate = (self.mode == OperatingMode.LIVE
                         or self.authz.separation(proposal.account_id).fixture_approver_must_differ_from_requester)
-            if separate:  # M3: compare PEOPLE, not principals
+            if separate and not self.waived(proposal.account_id):  # M3: compare PEOPLE, not principals
                 requester_identity = self.proposals.repo.get_stored(proposal_id).requester_identity
                 if requester_identity is None:
                     raise DecisionNotAllowedError("the proposal has no requester identity evidence, so separation "
@@ -292,6 +316,8 @@ class DecisionService:
             request_fingerprint=fingerprint, decided_at=now, approval_expires_at=approval_expires_at,
             revokes_decision_id=approval_id if kind == DecisionType.REVOKE else None, reason=reason,
             identity=identity,
+            separation_waived=(self.waiver.reason if kind == DecisionType.APPROVE and self.waived(proposal.account_id)
+                               else None),
         )
         event = LifecycleEvent(
             proposal_id=proposal_id, seq=head.seq + 1, event_type=event_type_for(head.state, to_state),
@@ -305,6 +331,7 @@ class DecisionService:
                 "approval_expires_at": approval_expires_at.isoformat() if approval_expires_at else None,
                 "revokes_decision_id": decision.revokes_decision_id,
                 "person_id": identity.person_id, "binding_kind": identity.binding_kind,
+                **({"separation_waived": self.waiver.reason} if self.waived(proposal.account_id) else {}),
             },
         )
         update = {"state": to_state, "seq": head.seq + 1, "updated_at": now}

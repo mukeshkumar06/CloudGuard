@@ -116,9 +116,18 @@ def _common(ctx: CostContext, tool: str, as_of: date, report, outcome, speech, *
                 speech=speech, report=report, **extra)
 
 
+# A tool call can make several Cost Explorer requests (pages, two months, anomalies). Past this budget the client
+# gets a clear error instead of waiting into the simulator's 60-second call timeout; the abandoned worker thread
+# ends on its own within the botocore timeouts in ce.CE_CONFIG.
+COST_CALL_BUDGET_SECONDS = 50.0
+
+
 async def _run(fn, *args):
-    """Cost Explorer calls block; keep them off the event loop."""
-    return await anyio.to_thread.run_sync(lambda: fn(*args))
+    """Cost Explorer calls block; keep them off the event loop, within COST_CALL_BUDGET_SECONDS."""
+    with anyio.move_on_after(COST_CALL_BUDGET_SECONDS) as scope:
+        return await anyio.to_thread.run_sync(lambda: fn(*args), abandon_on_cancel=True)
+    if scope.cancelled_caught:
+        raise ToolError(f"AWS Cost Explorer did not answer within {COST_CALL_BUDGET_SECONDS:g} seconds; try again")
 
 
 def _annotations(ctx: CostContext, title: str) -> ToolAnnotations:

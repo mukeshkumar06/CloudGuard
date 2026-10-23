@@ -6,7 +6,7 @@
     python -m cloudguard.governance policy init|show|history
     python -m cloudguard.governance policy save FILE --expected-version N --author NAME [--note TEXT]
     python -m cloudguard.governance policy restore VERSION --expected-version N --author NAME
-    python -m cloudguard.governance proposal save "REQUEST" [--idempotency-key KEY]
+    python -m cloudguard.governance proposal save "REQUEST" | --request-json FILE [--idempotency-key KEY]
     python -m cloudguard.governance proposal show|history PROPOSAL_ID
     python -m cloudguard.governance proposal approve PROPOSAL_ID --content-hash H [--acknowledge-overwrites]
     python -m cloudguard.governance proposal reject|revoke PROPOSAL_ID --content-hash H --reason TEXT
@@ -14,6 +14,7 @@
     python -m cloudguard.governance authz validate FILE | show | history
     python -m cloudguard.governance authz save FILE --expected-version N --mode fixture --dev-identity NAME | --mode live
     python -m cloudguard.governance proposal execute PROPOSAL_ID --approval-id A --mode fixture --dev-identity NAME
+    python -m cloudguard.governance proposal execute PROPOSAL_ID --approval-id A --mode live [--tagger-profile P]
     python -m cloudguard.governance proposal execution-show PROPOSAL_ID EXECUTION_ID | execution-history PROPOSAL_ID
 
 Identity never comes from a flag value: --mode live uses the caller's AWS credentials verified by
@@ -23,9 +24,12 @@ with `authz save`; without one, everything is denied. `authz save` is itself ide
 first save of a mode is a one-time bootstrap by the administrator named in
 CLOUDGUARD_AUTHZ_BOOTSTRAP_ADMIN; every later change needs 'admin' in the active allow-list.
 
-`proposal execute` is FIXTURE-ONLY: it changes tags in a simulated account (persisted in
---fixture-account, seeded from --fixture on first use) and never calls an AWS write API. There is
-no live execution option.
+`proposal execute --mode fixture` changes tags in a simulated account (persisted in --fixture-account,
+seeded from --fixture on first use) and never calls an AWS write API. `proposal execute --mode live`
+(Checkpoint 5) writes the approved tags to the authenticated AWS account: only an APPROVED proposal,
+approved by a different allow-listed person, executed by an STS-verified caller who is not the
+approver; every resource is re-read before its write and read back after it (docs/live-tagging.md).
+Writes use --tagger-profile when given (the CloudGuardTaggerRole credentials), else --profile.
 
 Policies are stored locally under .cloudguard/policies by default, or in the CloudGuard DynamoDB
 table with --table. --record saves raw live discovery as a fixture: review it before committing,
@@ -45,7 +49,7 @@ import boto3
 
 from cloudguard.governance.compliance import run_scan
 from cloudguard.governance.custom_tagging import CustomTaggingEngine
-from cloudguard.governance.custom_tagging.models import OutcomeStatus
+from cloudguard.governance.custom_tagging.models import OutcomeStatus, TaggingRequest
 from cloudguard.governance.remediation.approval import (
     AuthorizationError,
     DecisionNotAllowedError,
@@ -74,7 +78,9 @@ from cloudguard.governance.remediation.executor import (
     ConcurrentExecutionError,
     ExecutionNotAllowedError,
     FixtureRemediationExecutor,
+    LiveRemediationExecutor,
 )
+from cloudguard.governance.remediation.live_writer import LiveTagAccount
 from cloudguard.governance.remediation.models import ProposalIntegrityError, ProposalState
 from cloudguard.governance.remediation.writers import FixtureAccount
 from cloudguard.governance.remediation.repository import (
@@ -115,6 +121,7 @@ DEFAULT_PROPOSAL_DIR = Path(".cloudguard") / "proposals"
 DEFAULT_AUTHZ_DIR = Path(".cloudguard") / "authz"
 DEFAULT_FIXTURE_ACCOUNT = Path(".cloudguard") / "fixture-account.json"
 SIMULATED_BANNER = "FIXTURE EXECUTION: simulated account only - no AWS resource was or can be modified."
+LIVE_BANNER = "LIVE EXECUTION: approved tags were written to the authenticated AWS account (results per resource below)."
 
 
 class _Recorded:
@@ -182,8 +189,8 @@ def _fixture_account(args) -> FixtureAccount:
     return account
 
 
-def _print_execution(view) -> None:
-    print(SIMULATED_BANNER, file=sys.stderr)
+def _print_execution(view, live: bool = False) -> None:
+    print(LIVE_BANNER if live else SIMULATED_BANNER, file=sys.stderr)
     revalidation = {}
     for e in view.events:
         if e.revalidation is not None:
@@ -197,7 +204,7 @@ def _print_execution(view) -> None:
     if view.summary is not None:
         print(f"  outcome: {view.summary.outcome.value} ({view.summary.succeeded}/{view.summary.intended} succeeded)",
               file=sys.stderr)
-    print(json.dumps({"simulated_account": True, "execution": view.model_dump(mode="json"),
+    print(json.dumps({"simulated_account": not live, "execution": view.model_dump(mode="json"),
                       "revalidation": {a: v.model_dump(mode="json") for a, v in revalidation.items()}}, indent=2))
 
 
@@ -206,26 +213,45 @@ def _cmd_proposal(args, parser) -> int:
         service = _decisions(args, parser)
         account = _fixture_account(args) if args.mode != "live" else None
         source = _live_source(args, parser) if args.mode == "live" else account
-        outcome = CustomTaggingEngine(source, _policy(args)).prepare(args.request)
+        if (args.request is None) == (args.request_json is None):
+            parser.error("give either REQUEST or --request-json FILE")
+        engine = CustomTaggingEngine(source, _policy(args))
+        if args.request_json is not None:
+            # A structured request (for example from the MCP preview_tag_changes tool). Only the request is read:
+            # the targets, current tags and changes are resolved again here, never taken from the file.
+            request = TaggingRequest.model_validate_json(args.request_json.read_text(encoding="utf-8"))
+            outcome = engine.prepare_request(request)
+        else:
+            outcome = engine.prepare(args.request)
         if outcome.status != OutcomeStatus.PROPOSAL_READY:
             _print(outcome)
             print(f"error: not saved - only approvable proposals are stored (status {outcome.status.value})",
                   file=sys.stderr)
             return 1
-        identities = None
-        if account is not None:  # fixture: record immutable identities so recreation can be detected
-            identities = account.identities([r.resource_arn for r in outcome.proposal.records if r.changes])
+        # Record immutable identities so a deleted and recreated resource is never tagged by this approval.
+        arns = [r.resource_arn for r in outcome.proposal.records if r.changes]
+        if account is not None:
+            identities = account.identities(arns)
+        else:
+            identities = LiveTagAccount(source.session, outcome.proposal.account_id).identities(arns)
         _print(service.create_proposal(outcome.proposal, idempotency_key=args.idempotency_key or new_idempotency_key(),
                                        resource_identities=identities))
     elif args.proposal_cmd == "execute":
-        account = _fixture_account(args)
-        executor = FixtureRemediationExecutor(_decisions(args, parser), account)
-        try:
-            view = executor.execute(args.proposal_id, approval_id=args.approval_id,
-                                    idempotency_key=args.idempotency_key or new_idempotency_key())
-        finally:
-            account.save(args.fixture_account)
-        _print_execution(view)
+        decisions = _decisions(args, parser)
+        key = args.idempotency_key or new_idempotency_key()
+        if args.mode == "live":
+            writer_session = boto3.Session(profile_name=args.tagger_profile or args.profile)
+            account_id = writer_session.client("sts", config=BOTO_CONFIG).get_caller_identity()["Account"]
+            view = LiveRemediationExecutor(decisions, LiveTagAccount(writer_session, account_id)).execute(
+                args.proposal_id, approval_id=args.approval_id, idempotency_key=key)
+        else:
+            account = _fixture_account(args)
+            executor = FixtureRemediationExecutor(decisions, account)
+            try:
+                view = executor.execute(args.proposal_id, approval_id=args.approval_id, idempotency_key=key)
+            finally:
+                account.save(args.fixture_account)
+        _print_execution(view, live=args.mode == "live")
         return {ProposalState.SUCCEEDED: 0, ProposalState.PARTIAL: 4}.get(view.summary.outcome, 5)
     elif args.proposal_cmd in ("execution-show", "execution-history"):
         manager = _proposal_manager(args)
@@ -415,7 +441,9 @@ def main(argv: list[str] | None = None) -> int:
     prop = sub.add_parser("proposal", help="Persist proposals and record authenticated decisions (no execution)")
     prsub = prop.add_subparsers(dest="proposal_cmd", required=True)
     ps = prsub.add_parser("save", parents=[prop_store, ident], help="Build a proposal from a request and store it")
-    ps.add_argument("request")
+    ps.add_argument("request", nargs="?", default=None)
+    ps.add_argument("--request-json", type=Path, default=None,
+                    help="A structured TaggingRequest (e.g. preview_tag_changes' request); resolved again here")
     ps.add_argument("--idempotency-key", default=None, help="8-128 chars [A-Za-z0-9._:-]; replays return the same proposal")
     ps.add_argument("--fixture", type=Path, default=DEFAULT_TAG_FIXTURE)
     ps.add_argument("--fixture-account", type=Path, default=DEFAULT_FIXTURE_ACCOUNT,
@@ -438,12 +466,14 @@ def main(argv: list[str] | None = None) -> int:
     abt.add_argument("--reason", required=True)
 
     ex = prsub.add_parser("execute", parents=[prop_store],
-                          help="FIXTURE ONLY: execute an approved proposal against the simulated account")
+                          help="Execute an APPROVED proposal: the simulated account (fixture) or AWS (live)")
     ex.add_argument("proposal_id")
     ex.add_argument("--approval-id", required=True)
-    ex.add_argument("--mode", choices=["fixture"], required=True,
-                    help="Must be 'fixture'; live execution does not exist in this checkpoint")
-    ex.add_argument("--dev-identity", required=True, help="Development identity requesting execution")
+    ex.add_argument("--mode", choices=["fixture", "live"], required=True,
+                    help="fixture: simulated account, development identity; live: AWS, STS caller identity")
+    ex.add_argument("--dev-identity", default=None, help="Development identity requesting execution (fixture only)")
+    ex.add_argument("--tagger-profile", default=None,
+                    help="Live only: AWS profile whose credentials write the tags (default: --profile)")
     ex.add_argument("--authz-store", type=Path, default=DEFAULT_AUTHZ_DIR)
     ex.add_argument("--idempotency-key", default=None)
     ex.add_argument("--fixture", type=Path, default=DEFAULT_TAG_FIXTURE)

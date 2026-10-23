@@ -13,7 +13,9 @@ import json
 from datetime import datetime, timedelta
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from cloudguard.governance.models import ComplianceStatus, InspectionError, PolicyRef
 
@@ -40,25 +42,56 @@ class TaggingOperation(StrEnum):
         return self in (TaggingOperation.UPDATE_TAG, TaggingOperation.BULK_UPDATE_TAG)
 
 
+NameMatch = Literal["contains", "starts_with", "ends_with", "exact"]
+
+
+class NameFilter(_Frozen):
+    """Bulk targeting by resource name, as the user said it: "Lambdas containing ecommerce". Case is ignored."""
+
+    match: NameMatch
+    text: str = Field(min_length=1, max_length=128)
+
+    def matches(self, name: str) -> bool:
+        n, t = name.casefold(), self.text.casefold()
+        return {"contains": t in n, "starts_with": n.startswith(t), "ends_with": n.endswith(t),
+                "exact": n == t}[self.match]
+
+
 class TargetCriteria(_Frozen):
     """Exactly what the user said to target. Nothing here is inferred."""
 
-    resource_type: str | None = None  # None only for specific targets named without a type
+    resource_type: str | None = None  # None only for specific targets named without a type, or a name filter
     name: str | None = None
     arn: str | None = None
     account_id: str | None = None
     region: str | None = None
-    all_of_type: bool = False  # True only when the user explicitly said "all <type>"
+    all_of_type: bool = False  # True only for an explicit bulk request: "all <type>", a name filter or a selection
+    # Bulk narrowing (Checkpoint 5). Omitted from serialization when unset, so the content hash of every proposal
+    # that doesn't use them is unchanged.
+    name_filter: NameFilter | None = None
+    arns: tuple[str, ...] | None = None  # an explicit selection ("these three"), each resolved exactly
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_narrowing(self, handler):
+        data = handler(self)
+        for key in ("name_filter", "arns"):
+            if data.get(key) is None:
+                data.pop(key, None)
+        return data
 
     @model_validator(mode="after")
     def _shape(self) -> TargetCriteria:
         if self.all_of_type:
-            if self.resource_type is None:
-                raise ValueError("bulk targeting requires an explicit resource type")
+            if self.resource_type is None and self.name_filter is None and not self.arns:
+                raise ValueError("bulk targeting requires an explicit resource type, name filter or selection")
             if self.name or self.arn:
                 raise ValueError("bulk targeting cannot also name a specific resource")
+            if self.arns is not None and (not self.arns or len(set(self.arns)) != len(self.arns)):
+                raise ValueError("a selection needs one or more distinct ARNs")
         elif not (self.name or self.arn):
             raise ValueError("a specific target needs a resource name or ARN")
+        elif self.name_filter or self.arns:
+            raise ValueError("name filters and selections are bulk targets")
         return self
 
 

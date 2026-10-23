@@ -19,7 +19,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_serializer, model_validator
 
 from cloudguard.governance.custom_tagging.models import PROPOSAL_SCHEMA, TaggingProposal
 from cloudguard.governance.models import PolicyRef
@@ -393,6 +393,16 @@ class DecisionRecord(_Frozen):
     aborts_execution_id: str | None = None  # ABORT only
     identity: IdentityEvidence  # M3: the person who decided
     reason: str = Field(default="", max_length=1000)
+    # Set only when a PersonalAccountWaiver let the requester approve (personal voice tagging). Omitted from
+    # serialization when unset, so every other decision's stored form and digest are unchanged.
+    separation_waived: str | None = None
+
+    @model_serializer(mode="wrap")
+    def _omit_unset_waiver(self, handler):
+        data = handler(self)
+        if data.get("separation_waived") is None:
+            data.pop("separation_waived", None)
+        return data
 
     @field_validator("decided_at", "approval_expires_at")
     @classmethod

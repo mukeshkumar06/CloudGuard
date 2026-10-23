@@ -158,14 +158,20 @@ def test_tools_are_annotated_read_only_with_strict_schemas(tmp_path):
 
 
 def test_no_tool_accepts_account_role_profile_region_or_credentials(tmp_path):
+    # Exceptions: `region` on get_resource_inventory narrows a scan to one of the server's own enabled regions
+    # (test_scoped_inventory.py proves it can't widen one), and on explain_finding / recommend_tags it only narrows a
+    # name match within the latest scan. Nothing can name an account, role or credentials.
+    narrowing = {("get_resource_inventory", "region"), ("search_resources", "region"), ("explain_finding", "region"),
+                 ("recommend_tags", "region"), ("preview_tag_changes", "region"),
+                 ("list_untagged_resources", "region")}
     forbidden = re.compile(r"account|role|arn|profile|region|credential|key|secret|token|session|policy", re.I)
     for tool in list_tools(gov(tmp_path)):
         for param in tool.inputSchema.get("properties", {}):
-            assert not forbidden.search(param), (tool.name, param)
+            assert (tool.name, param) in narrowing or not forbidden.search(param), (tool.name, param)
 
 
-@pytest.mark.parametrize("arg", ["account_id", "role_arn", "profile", "region", "regions", "policy_version",
-                                 "aws_access_key_id", "service"])
+@pytest.mark.parametrize("arg", ["account_id", "role_arn", "profile", "regions", "policy_version",
+                                 "aws_access_key_id", "resource_arn"])
 def test_unknown_arguments_are_rejected_before_any_discovery(tmp_path, arg):
     ctx, src = counted(tmp_path)
     for name in GOVERNANCE_TOOL_NAMES:
@@ -183,11 +189,20 @@ def test_unknown_arguments_are_rejected_before_any_discovery(tmp_path, arg):
     ("list_untagged_resources", {"cursor": "scan-x:1"}),
     ("list_untagged_resources", {"cursor": "scan-20261016T000000Z-abcdef:-1"}),
     ("explain_finding", {"finding_id": "tagcomp-XYZ"}),
-    ("explain_finding", {}),
+    ("explain_finding", {"resource_name": ""}),
+    ("explain_finding", {"resource_name": "x", "service": "iam"}),
+    ("explain_finding", {"resource_name": "x", "region": "all"}),
 ])
 def test_invalid_arguments_are_validation_errors(tmp_path, name, args):
     ctx, src = counted(tmp_path)
     assert "validation error" in error_text(ctx, name, args)
+    assert src.calls == 0
+
+
+@pytest.mark.parametrize("args", [{}, {"finding_id": "tagcomp-0000000000000000", "resource_name": "x"}])
+def test_explain_needs_exactly_one_of_finding_id_or_name(tmp_path, args):
+    ctx, src = counted(tmp_path)
+    assert "give either finding_id or resource_name" in error_text(ctx, "explain_finding", args)
     assert src.calls == 0
 
 
@@ -362,6 +377,24 @@ def test_list_untagged_covers_missing_mandatory_tags_with_evidence(tmp_path):
     assert [rule["key"] for rule in orders["applicable_rules"]] == ["Environment", "Project", "Owner", "CostCenter"]
     # invalid-value-only resources (audit-events, batch-worker-1) are not "untagged"
     assert "audit-events" not in names and "batch-worker-1" not in names
+
+
+def test_list_untagged_narrows_to_one_enabled_region(tmp_path):
+    ctx = gov(tmp_path, multi_region_fixture(tmp_path))
+    everywhere = ok(ctx, "list_untagged_resources", {"limit": MAX_PAGE})
+    assert ok(ctx, "list_untagged_resources", {"limit": MAX_PAGE, "region": "all"})["total"] == everywhere["total"]
+    one = ok(ctx, "list_untagged_resources", {"limit": MAX_PAGE, "region": "us-east-1"})
+    expected = [r for r in everywhere["resources"] if r["region"] == "us-east-1"]
+    assert one["total"] == len(expected) > 0 and {r["region"] for r in one["resources"]} == {"us-east-1"}
+    assert one["regions_scanned"] == ["us-east-1"]
+    mumbai = ok(ctx, "list_untagged_resources", {"limit": MAX_PAGE, "region": "ap-south-1"})
+    assert {r["region"] for r in mumbai["resources"]} == {"ap-south-1"}
+    assert mumbai["total"] + one["total"] == everywhere["total"]
+
+
+def test_list_untagged_refuses_a_region_that_is_not_enabled(tmp_path):
+    text = error_text(gov(tmp_path), "list_untagged_resources", {"region": "eu-central-1"})
+    assert "enabled" in text
 
 
 def test_list_untagged_paginates_without_silent_truncation(tmp_path):
@@ -972,7 +1005,7 @@ def test_refresh_within_a_minute_is_deferred(tmp_path):
         assert c["scan_id"] == f["scan_id"]
         assert c["freshness"]["refresh_deferred"] is True and c["freshness"]["scan_reused"] is True
         assert c["speech"].startswith(
-            "A new scan was not started because the last one finished less than a minute ago.")
+            "A new scan was not started because the last one finished less than 10 seconds ago.")
         assert c["freshness"]["refresh_available_at"] == f["freshness"]["refresh_available_at"]
     scanned = datetime.fromisoformat(f["freshness"]["scanned_at"])
     assert datetime.fromisoformat(f["freshness"]["refresh_available_at"]) == scanned + MIN_REFRESH_INTERVAL

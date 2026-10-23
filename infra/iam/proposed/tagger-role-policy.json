@@ -34,7 +34,7 @@
     {
       "Sid": "PostWriteVerificationReads",
       "Effect": "Allow",
-      "Action": ["lambda:ListTags", "dynamodb:ListTagsOfResource"],
+      "Action": ["lambda:ListTags", "dynamodb:ListTagsOfResource", "dynamodb:DescribeTable"],
       "Resource": [
         "arn:aws:lambda:*:<ACCOUNT_ID>:function:*",
         "arn:aws:dynamodb:*:<ACCOUNT_ID>:table/*"
@@ -44,6 +44,12 @@
       "Sid": "PostWriteVerificationReadsEc2",
       "Effect": "Allow",
       "Action": "ec2:DescribeInstances",
+      "Resource": "*"
+    },
+    {
+      "Sid": "BucketIdentityReads",
+      "Effect": "Allow",
+      "Action": ["s3:GetBucketLocation", "s3:ListAllMyBuckets"],
       "Resource": "*"
     },
     {

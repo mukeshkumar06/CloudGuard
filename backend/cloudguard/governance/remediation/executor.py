@@ -1,11 +1,13 @@
-"""Fixture-only remediation executor (Checkpoint 4.3; execution safety hardened in Batch 2 - M1, M2, L2).
+"""Remediation executor: the simulated account (Checkpoint 4.3; execution safety hardened in Batch 2 - M1, M2, L2)
+and, since Checkpoint 5, the authenticated AWS account (LiveRemediationExecutor + live_writer.LiveTagAccount).
 
 Flow for one execution request (proposal id + approval id + idempotency key, nothing else):
-  1. identity from the IdentityProvider (FIXTURE only; every LIVE attempt is refused);
+  1. identity from the IdentityProvider, in the executor's own mode (a FIXTURE executor refuses LIVE identities and
+     the LIVE executor refuses development identities);
   2. load the immutable proposal and approval from server-side storage (verified on read);
   3. authorise the requester ('execute') and re-check the approval with
      DecisionService.verify_for_execution(); the current tagging policy must still be the approved
-     one (else the proposal becomes STALE); the simulated account must be the proposal's account;
+     one (else the proposal becomes STALE); the account must be the proposal's account;
   4. APPROVED -> EXECUTING with a new execution id and a lease (fencing token) in one transaction,
      conditional on the head still holding this approval, unexpired at the start instant (L2);
   5. revalidate every approved resource and record the results;
@@ -116,7 +118,7 @@ class ExecutionNotAllowedError(PermissionError):
 
 
 class LiveExecutionNotSupportedError(ExecutionNotAllowedError):
-    """Checkpoint 4.3 executes against the simulated account only."""
+    """The fixture executor was asked to act in live mode (live execution is LiveRemediationExecutor's)."""
 
 
 class ProposalStaleError(ExecutionNotAllowedError):
@@ -132,16 +134,25 @@ class LeaseLostError(ConcurrentExecutionError):
     It has issued no write since its last recorded WRITE_INTENT and will issue none."""
 
 
-class FixtureRemediationExecutor:
-    def __init__(self, decisions: DecisionService, account: FixtureAccount, *,
+class RemediationExecutor:
+    """The execution flow above, for one operating mode. Use FixtureRemediationExecutor (simulated account) or
+    LiveRemediationExecutor (the authenticated AWS account); this class is never used directly."""
+
+    MODE: OperatingMode
+
+    def _check(self, decisions: DecisionService, account) -> None:
+        raise NotImplementedError
+
+    def _writer(self, account):
+        raise NotImplementedError
+
+    def __init__(self, decisions: DecisionService, account, *,
                  clock: Callable[[], datetime] | None = None, lease_ttl: timedelta = LEASE_TTL,
                  write_budget: timedelta = WRITE_BUDGET, safety_margin: timedelta = LEASE_SAFETY_MARGIN,
                  hooks: Callable[[str, str], None] | None = None, max_attempts: int = MAX_ATTEMPTS,
-                 sleep: Callable[[float], None] = lambda _s: None, instance_id: str | None = None):
-        if decisions.mode != OperatingMode.FIXTURE:
-            raise LiveExecutionNotSupportedError("live remediation is not available in this checkpoint")
-        if type(account) is not FixtureAccount:
-            raise TypeError("the executor only operates on a FixtureAccount")
+                 sleep: Callable[[float], None] = lambda _s: None, instance_id: str | None = None,
+                 stop_check: Callable[[], str | None] | None = None):
+        self._check(decisions, account)
         if not write_budget + safety_margin < lease_ttl:
             raise ValueError("write_budget + safety_margin must be shorter than the lease TTL")
         if timedelta(seconds=sum(BACKOFF_BASE_S * 2 ** i for i in range(max_attempts - 1))) >= write_budget:
@@ -150,7 +161,7 @@ class FixtureRemediationExecutor:
         self.proposals = decisions.proposals
         self.repo = decisions.proposals.repo
         self.account = account
-        self.writer = FixtureWriter(account)
+        self.writer = self._writer(account)
         self.clock = clock or decisions.clock
         self.lease_ttl = lease_ttl
         self.write_budget = write_budget
@@ -159,12 +170,15 @@ class FixtureRemediationExecutor:
         self.max_attempts = max_attempts
         self.sleep = sleep
         self.owner = f"executor-{instance_id or uuid.uuid4()}"
+        # Consulted before every write, like the approval-expiry check: a reason stops the execution cleanly (the
+        # remaining resources are NOT_ATTEMPTED). Used by voice tagging's kill switch.
+        self.stop_check = stop_check
 
     # ================================================================ public API
 
     def execute(self, proposal_id: str, *, approval_id: str, idempotency_key: str) -> ExecutionView:
-        if self.decisions.identity.mode != OperatingMode.FIXTURE:
-            raise LiveExecutionNotSupportedError("live remediation is not available in this checkpoint")
+        if self.decisions.identity.mode != self.MODE:
+            raise self._mode_error()
         principal = self.decisions._principal()  # IdentityProvider; refuses mismatched modes
         fingerprint = canonical_digest({"proposal_id": proposal_id, "approval_id": approval_id,
                                         "principal": principal.canonical_id})
@@ -175,9 +189,9 @@ class FixtureRemediationExecutor:
         view = self.proposals.get(proposal_id)  # verified; lazy proposal/approval expiry applied
         proposal, head = view.proposal, view.head
         self.decisions._authorize(principal, proposal.account_id, Permission.EXECUTE)
-        identity = self.decisions.authz.resolve_identity(principal, proposal.account_id, OperatingMode.FIXTURE)
+        identity = self.decisions.authz.resolve_identity(principal, proposal.account_id, self.MODE)
         if self.account.account_id != proposal.account_id:
-            raise ExecutionNotAllowedError(f"ACCOUNT_MISMATCH: simulated account {self.account.account_id} "
+            raise ExecutionNotAllowedError(f"ACCOUNT_MISMATCH: {self.MODE.value.lower()} account {self.account.account_id} "
                                            f"is not the proposal account {proposal.account_id}")
 
         if idem is not None and idem.execution_id:
@@ -213,10 +227,13 @@ class FixtureRemediationExecutor:
         approval = self.repo.get_decision(proposal_id, approval_id)
         if approval is None:
             raise ExecutionNotAllowedError("approval record missing")
+        # The one personal account a waiver names, approved under that waiver: one person does all three.
+        if self.decisions.waived(account_id) and approval.separation_waived:
+            return
         if identity.person_id == approval.identity.person_id:
             raise ExecutionNotAllowedError(f"separation of duties: person {identity.person_id!r} approved this "
                                            "proposal and cannot execute it")
-        if self.decisions.authz.separation(account_id).executor_must_differ_from_requester(OperatingMode.FIXTURE):
+        if self.decisions.authz.separation(account_id).executor_must_differ_from_requester(self.MODE):
             requester = self.repo.get_stored(proposal_id).requester_identity
             if requester is None:
                 raise ExecutionNotAllowedError("the proposal has no requester identity evidence, so separation of "
@@ -247,10 +264,11 @@ class FixtureRemediationExecutor:
         record = ExecutionRecord(
             execution_id=execution_id, proposal_id=proposal.proposal_id, approval_id=approval_id,
             content_hash=proposal.content_hash, binding_digest=stored.binding_digest, account_id=proposal.account_id,
-            mode=OperatingMode.FIXTURE, requested_by=principal.as_actor(), approver=approval.principal, started_at=now,
+            mode=self.MODE, requested_by=principal.as_actor(), approver=approval.principal, started_at=now,
             approval_expires_at=approval.approval_expires_at, idempotency_key=idempotency_key,
             executor_identity=identity, approver_identity=approval.identity,
             request_fingerprint=fingerprint, intended_resources=[r.resource_arn for r in proposal.records if r.changes],
+            separation_waived=(approval.separation_waived if self.decisions.waived(proposal.account_id) else None),
         )
         lease = ExecutionLease(execution_id=execution_id, proposal_id=proposal.proposal_id, owner=self.owner, token=1,
                                acquired_at=now, expires_at=now + self.lease_ttl)
@@ -259,7 +277,7 @@ class FixtureRemediationExecutor:
             event_type=event_type_for(head.state, ProposalState.EXECUTING), from_state=head.state,
             to_state=ProposalState.EXECUTING, actor=principal.as_actor(), at=now, reason="fixture execution started",
             content_hash=proposal.content_hash,
-            details={"execution_id": execution_id, "approval_id": approval_id, "mode": OperatingMode.FIXTURE.value,
+            details={"execution_id": execution_id, "approval_id": approval_id, "mode": self.MODE.value,
                      "lease_owner": self.owner, "person_id": identity.person_id},
         )
         new_head = head.model_copy(update={"state": ProposalState.EXECUTING, "seq": head.seq + 1, "updated_at": now,
@@ -315,7 +333,7 @@ class FixtureRemediationExecutor:
         if now > record.started_at + MAX_EXECUTION_WINDOW:
             return "execution window elapsed before recovery"
         if self.decisions.authz.grants(record.approver.id, record.account_id, Permission.APPROVE,
-                                       OperatingMode.FIXTURE) is None:
+                                       self.MODE) is None:
             return "approver is no longer authorised; remaining resources not attempted"
         pm = self.proposals.policy_manager
         if pm is None:  # fail closed (L1)
@@ -358,7 +376,8 @@ class FixtureRemediationExecutor:
                     outcome = self._not_written(pre, prefix="at pre-write re-read: ")
                 else:
                     self._hook("before_write", arn)
-                    stop = self._stop_reason(view.record, proposal, self.clock())
+                    stop = self._stop_reason(view.record, proposal, self.clock()) or (
+                        self.stop_check() if self.stop_check is not None else None)
                     if stop:
                         return self._abandon(view, token, principal, stop)
                     write = ApprovedWrite(resource_arn=arn, changes=tuple(pre.pending))
@@ -547,3 +566,47 @@ class FixtureRemediationExecutor:
         except LeaseConflictError as exc:
             raise LeaseLostError(f"lease lost before finalisation: {exc}") from None
         return self.load(record.proposal_id, record.execution_id)
+
+
+class FixtureRemediationExecutor(RemediationExecutor):
+    """Executes against the simulated FixtureAccount only, with FIXTURE identities."""
+
+    MODE = OperatingMode.FIXTURE
+
+    def _check(self, decisions, account) -> None:
+        if decisions.mode != OperatingMode.FIXTURE:
+            raise LiveExecutionNotSupportedError("the fixture executor never runs in live mode; use "
+                                                 "LiveRemediationExecutor with a LiveTagAccount")
+        if type(account) is not FixtureAccount:
+            raise TypeError("the fixture executor only operates on a FixtureAccount")
+
+    def _writer(self, account):
+        return FixtureWriter(account)
+
+    def _mode_error(self):
+        return LiveExecutionNotSupportedError("the fixture executor never runs with a live identity")
+
+
+class LiveRemediationExecutor(RemediationExecutor):
+    """Executes an approved proposal against the authenticated AWS account (Checkpoint 5).
+
+    Only with LIVE operating mode and an STS-verified LIVE identity, which in turn means the approval was
+    made by a different, allow-listed person (separation of duties is enforced by DecisionService and
+    _require_separation). There is no flag or environment switch: the caller constructs this class with a
+    LiveTagAccount explicitly, which only the CLI's `proposal execute --mode live` does."""
+
+    MODE = OperatingMode.LIVE
+
+    def _check(self, decisions, account) -> None:
+        from cloudguard.governance.remediation.live_writer import LiveTagAccount
+        if decisions.mode != OperatingMode.LIVE:
+            raise ExecutionNotAllowedError("the live executor needs LIVE operating mode and identities")
+        if type(account) is not LiveTagAccount:
+            raise TypeError("the live executor only operates on a LiveTagAccount")
+
+    def _writer(self, account):
+        from cloudguard.governance.remediation.live_writer import LiveWriter
+        return LiveWriter(account)
+
+    def _mode_error(self):
+        return ExecutionNotAllowedError("the live executor needs an STS-verified LIVE identity")

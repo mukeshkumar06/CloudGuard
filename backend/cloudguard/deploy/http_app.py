@@ -2,7 +2,7 @@
 
 Lambda Web Adapter starts a normal HTTP server inside the function and forwards each Function URL request
 to it, so the server needs no Lambda-specific code: this module only adds what a remote endpoint needs.
-It registers no tools of its own: all twelve (six cost, five governance, one identity) come from
+It registers no tools of its own: all fourteen (six cost, seven governance, one identity) come from
 cloudguard.server.app.create_server.
 
 Three separate concerns:
@@ -49,6 +49,9 @@ Environment:
                               CLOUDGUARD_TOKEN_SHA256. Still a static token: OAuth account linking is not done.
     CLOUDGUARD_ALLOWED_HOSTS  comma-separated Host values, each "name" or "name:port" or "name:*"
                               (default: 127.0.0.1:*,localhost:*,[::1]:*)
+    CLOUDGUARD_VOICE_TAGGING_ENABLED and CLOUDGUARD_VOICE_*  personal voice tagging under /operator, disabled by
+                              default; see cloudguard.voice_tagging.config. It is not an MCP surface: no token
+                              listed here can reach it, and it needs its own operator session.
     CLOUDGUARD_POLICY_STORE   local tagging-policy directory, read only (default: .cloudguard/policies under
                               the working directory; when absent the built-in default policy is used)
 """
@@ -76,6 +79,7 @@ from cloudguard.server.cost_tools import COST_TOOL_NAMES
 from cloudguard.deploy import alexa_projection
 from cloudguard.server.governance_tools import GOVERNANCE_TOOL_NAMES, redact
 from cloudguard.server.identity_tools import IDENTITY_TOOL_NAMES, IdentityContext
+from cloudguard.voice_tagging.config import VoiceConfigError, VoiceTaggingConfig
 
 log = logging.getLogger("cloudguard.deploy")
 
@@ -87,11 +91,13 @@ KNOWN_SCOPES = frozenset({COST_SCOPE, GOVERNANCE_SCOPE, ALEXA_SCOPE})
 DEFAULT_SCOPES = frozenset({COST_SCOPE, GOVERNANCE_SCOPE})
 ALEXA_SUBJECT = "alexa"
 # The Alexa-facing surface: explicit, read-only tools only. Proposal, approval, revocation, abort and execution
-# tools must never be added here.
+# tools must never be added here. preview_tag_changes is a read-only dry run (it stores nothing and writes nothing),
+# projected without ARNs, account IDs or current tag values; saving, approving and executing stay in the CLI.
 ALEXA_TOOLS = frozenset({
     "get_monthly_aws_bill", "get_current_month_spending", "get_cost_breakdown", "compare_monthly_costs",
     "investigate_cost_increase", "get_cost_anomalies",
-    "get_resource_inventory", "scan_tag_compliance", "list_untagged_resources", "explain_finding", "recommend_tags",
+    "get_resource_inventory", "search_resources", "scan_tag_compliance", "list_untagged_resources", "explain_finding",
+    "recommend_tags", "preview_tag_changes",
     "get_aws_account_identity",
 })
 TOOL_SCOPES = {**{t: COST_SCOPE for t in COST_TOOL_NAMES}, **{t: GOVERNANCE_SCOPE for t in GOVERNANCE_TOOL_NAMES},
@@ -139,6 +145,7 @@ class DeployConfig:
     token_scopes: frozenset[str] = DEFAULT_SCOPES
     policy_dir: Path | None = POLICY_DIR
     alexa_token_sha256: bytes | None = None
+    voice: VoiceTaggingConfig = VoiceTaggingConfig.disabled()
 
     @classmethod
     def from_env(cls, env: Mapping[str, str] | None = None) -> DeployConfig:
@@ -187,7 +194,13 @@ class DeployConfig:
             if host in ("*", "*:*") or not _HOST.match(host):
                 raise ConfigError(f"invalid allowed host {host!r}: use name, name:port or name:*")
         store = env.get("CLOUDGUARD_POLICY_STORE")
-        return cls(mode=mode, fixture=env.get("CLOUDGUARD_FIXTURE") or None, token_sha256=bytes.fromhex(digest),
+        try:
+            voice = VoiceTaggingConfig.from_env(
+                env, mode=mode, other_digests=(bytes.fromhex(digest), bytes.fromhex(alexa_digest) if alexa_digest else None),
+                weak_digests=WEAK_DIGESTS)
+        except VoiceConfigError as exc:
+            raise ConfigError(str(exc)) from None
+        return cls(voice=voice, mode=mode, fixture=env.get("CLOUDGUARD_FIXTURE") or None, token_sha256=bytes.fromhex(digest),
                    allowed_hosts=hosts, token_subject=subject, token_scopes=scopes,
                    policy_dir=Path(store) if store else POLICY_DIR,
                    alexa_token_sha256=bytes.fromhex(alexa_digest) if alexa_digest else None)
@@ -413,10 +426,68 @@ def build_contexts(config: DeployConfig) -> tuple[CostContext, GovernanceContext
     return CostContext.fixture(config.fixture), GovernanceContext.fixture(policy_dir=config.policy_dir)
 
 
+class OperatorRouter:
+    """/operator/* goes to personal voice tagging (its own cookie session, never a bearer token) when it is
+    enabled, and answers 404 otherwise; everything else goes to the bearer-authenticated MCP app unchanged."""
+
+    def __init__(self, mcp_app, voice_app=None):
+        self.mcp_app, self.voice_app = mcp_app, voice_app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and (scope["path"] == "/operator" or scope["path"].startswith("/operator/")):
+            if self.voice_app is None:
+                return await _send_json(send, 404, {"error": "voice_tagging_disabled"})
+            return await self.voice_app(scope, receive, send)
+        return await self.mcp_app(scope, receive, send)
+
+
+def build_voice_app(config: DeployConfig, backend=None, clock=None):
+    """The voice tagging routes, or None when voice tagging is disabled. `backend` replaces the live or fixture
+    backend (tests only)."""
+    if not config.voice.enabled:
+        return None
+    from cloudguard.governance.discovery import FixtureSource
+    from cloudguard.governance.policy_store import LocalPolicyStore, PolicyManager
+    from cloudguard.governance.remediation.authz import AuthzManager, LocalAuthzStore
+    from cloudguard.governance.remediation.repository import LocalProposalRepository, ProposalManager
+    from cloudguard.governance.remediation.writers import FixtureAccount
+    from cloudguard.server.context import GOVERNANCE_FIXTURE
+    from cloudguard.voice_tagging.backends import FixtureBackend, LiveBackend, seed_fixture_authz
+    from cloudguard.voice_tagging.service import AuditLog, VoiceTaggingService
+    from cloudguard.voice_tagging.sessions import OperatorSessions
+    from cloudguard.voice_tagging.web import VoiceTaggingApp
+
+    v = config.voice
+    if config.mode == "live":
+        # The CLI's stores: proposals made by voice show up in `proposal show/history`, and the live allow-list is
+        # the one an administrator maintains with `authz save --mode live`. Never seeded here.
+        root, policy_dir = v.store, config.policy_dir or POLICY_DIR
+        if backend is None:
+            import boto3
+            backend = LiveBackend(boto3.Session(), v.role_arn)
+    else:
+        root = v.store / "voice-fixture"  # simulated account only: kept apart from the CLI's fixture stores
+        policy_dir = root / "policies"
+        if backend is None:
+            backend = FixtureBackend(FixtureAccount.from_discovery(FixtureSource(GOVERNANCE_FIXTURE).discover()))
+    kw = {"clock": clock} if clock else {}
+    policies = PolicyManager(LocalPolicyStore(policy_dir))
+    policies.ensure_default()
+    proposals = ProposalManager(LocalProposalRepository(root / "proposals"), policy_manager=policies, **kw)
+    authz = AuthzManager(LocalAuthzStore(root / "authz"))
+    if config.mode != "live":
+        seed_fixture_authz(authz, backend.account_id)
+    service = VoiceTaggingService(v, backend, proposals, authz, policies, AuditLog(root / "voice-tagging-audit.jsonl"),
+                                  **kw)
+    sessions = OperatorSessions(v.operator_token_sha256, v.operator_subject, v.session_ttl, on_end=service.end_session,
+                                **kw)
+    return VoiceTaggingApp(service, sessions, config.allowed_hosts)
+
+
 def build_app(config: DeployConfig | None = None, *,
               contexts: tuple[CostContext, GovernanceContext] | None = None,
-              identity: IdentityContext | None = None):
-    """All twelve MCP tools behind authentication, tool authorization and a host allow-list.
+              identity: IdentityContext | None = None, voice_backend=None):
+    """All fourteen MCP tools behind authentication, tool authorization and a host allow-list.
 
     `contexts` and `identity` replace the contexts built from `config` (tests and embedding only). Without
     `identity`, the identity context follows the cost context's mode; live mode calls STS only inside the tool.
@@ -433,4 +504,5 @@ def build_app(config: DeployConfig | None = None, *,
     extra = (((config.alexa_token_sha256, Principal(ALEXA_SUBJECT, frozenset({ALEXA_SCOPE}), "static-token")),)
              if config.alexa_token_sha256 else ())
     authenticator = StaticTokenAuthenticator(config.token_sha256, config.token_subject, config.token_scopes, extra)
-    return BearerAuthApp(server.streamable_http_app(), authenticator, config.mode)
+    return OperatorRouter(BearerAuthApp(server.streamable_http_app(), authenticator, config.mode),
+                          build_voice_app(config, voice_backend))

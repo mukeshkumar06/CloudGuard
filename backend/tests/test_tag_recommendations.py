@@ -346,7 +346,8 @@ def recs(result):
 
 def test_eleven_tools_with_the_existing_ten_unchanged(tmp_path):
     names = {t.name for t in list_tools(scenario(tmp_path))}
-    assert len(names) == 11 and names == EXISTING_TEN | {"recommend_tags"}
+    # Later additions: search_resources and the operator-only preview_tag_changes (Checkpoint 5).
+    assert len(names) == 13 and names == EXISTING_TEN | {"recommend_tags", "search_resources", "preview_tag_changes"}
     assert set(COST_TOOL_NAMES) | set(GOVERNANCE_TOOL_NAMES) == names
 
 
@@ -355,12 +356,15 @@ def test_tool_is_annotated_read_only_with_one_strict_argument(tmp_path):
     a = t.annotations
     assert a.readOnlyHint is True and a.destructiveHint is False and a.idempotentHint is True
     assert a.openWorldHint is False
-    assert set(t.inputSchema["properties"]) == {"resource"} and t.inputSchema["required"] == ["resource"]
+    # resource (finding_id or ARN) or resource_name (with optional service / region to narrow the name match)
+    assert set(t.inputSchema["properties"]) == {"resource", "resource_name", "service", "region"}
+    assert not t.inputSchema.get("required")
     assert t.inputSchema["additionalProperties"] is False
 
 
 @pytest.mark.parametrize("args,text", [
-    ({}, "validation error"),
+    ({}, "give either resource"),
+    ({"resource": "tagcomp-0000000000000000", "resource_name": "x"}, "give either resource"),
     ({"resource": ""}, "validation error"),
     ({"resource": "tagcomp-XYZ"}, "validation error"),
     ({"resource": "fn"}, "validation error"),

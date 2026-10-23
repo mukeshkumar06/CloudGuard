@@ -24,7 +24,10 @@ if TYPE_CHECKING:  # fixture mode must run without importing boto3
 
 # Cost Explorer has a single endpoint regardless of where the account's resources live.
 CE_REGION = "us-east-1"
-CE_CONFIG = Config(retries={"mode": "standard", "max_attempts": 3}, user_agent_extra="cloudguard-ai")
+# Explicit timeouts (botocore's defaults are 60 s each): one request is at most about 3 x (3 + 10) s with retries,
+# and the MCP server bounds a whole tool call separately (cost_tools.COST_CALL_BUDGET_SECONDS).
+CE_CONFIG = Config(retries={"mode": "standard", "max_attempts": 3}, connect_timeout=3, read_timeout=10,
+                   user_agent_extra="cloudguard-ai")
 
 DEFAULT_MAX_PAGES = 5
 MAX_PAGES_LIMIT = 20

@@ -73,7 +73,7 @@ def test_initialize_negotiates_each_protocol_version(client, version):
 @pytest.mark.parametrize("version", VERSIONS)
 def test_tools_list_and_fixture_tool_call(client, version):
     tools = rpc(client, "tools/list", {}, version=version).json()["result"]["tools"]
-    assert len(tools) == 12 and all(t["annotations"]["readOnlyHint"] for t in tools)
+    assert len(tools) == 14 and all(t["annotations"]["readOnlyHint"] for t in tools)
     r = rpc(client, "tools/call", {"name": "get_monthly_aws_bill", "arguments": {}}, rid=3, version=version)
     result = r.json()["result"]
     assert result["isError"] is False
@@ -204,8 +204,11 @@ def test_prototype_imports_no_boto3_and_stdio_entry_is_unchanged():
                           timeout=120)
     assert proc.returncode == 0 and "OK" in proc.stdout, proc.stderr
 
+# Tools whose required arguments have no default (everything else is called with {}).
+REQUIRED_ARGS = {"search_resources": {"text": "e"}, "preview_tag_changes": {"tags": {"Team": "x"}, "service": "lambda"}}
 
-# ---------- all twelve tools ----------
+
+# ---------- all fourteen tools ----------
 
 ALL_TOOLS = set(COST_TOOL_NAMES) | set(GOVERNANCE_TOOL_NAMES) | {"get_aws_account_identity"}
 
@@ -214,16 +217,16 @@ def call_tool(client, name, arguments=None, **kw):
     return rpc(client, "tools/call", {"name": name, "arguments": arguments or {}}, **kw)
 
 
-def test_all_twelve_tools_registered_and_each_runs_in_fixture_mode(client):
+def test_all_fourteen_tools_registered_and_each_runs_in_fixture_mode(client):
     tools = {t["name"]: t for t in rpc(client, "tools/list", {}).json()["result"]["tools"]}
-    assert set(tools) == ALL_TOOLS and len(ALL_TOOLS) == 12
+    assert set(tools) == ALL_TOOLS and len(ALL_TOOLS) == 14
     assert all(t["annotations"]["readOnlyHint"] and not t["annotations"]["destructiveHint"] for t in tools.values())
     out = {}
     needs_finding = ["explain_finding", "recommend_tags"]
     for name in sorted(ALL_TOOLS - set(needs_finding)) + needs_finding:
         finding_id = out["list_untagged_resources"]["resources"][0]["finding_id"] if name in needs_finding else None
         args = ({"finding_id": finding_id} if name == "explain_finding"
-                else {"resource": finding_id} if name == "recommend_tags" else {})
+                else {"resource": finding_id} if name == "recommend_tags" else REQUIRED_ARGS.get(name, {}))
         result = call_tool(client, name, args).json()["result"]
         assert result["isError"] is False, (name, result["content"])
         out[name] = result["structuredContent"]
@@ -384,7 +387,7 @@ def test_live_mode_makes_no_aws_call_before_an_authorized_tool_call(aws_calls, t
             assert call_tool(c, "scan_tag_compliance", token=token).status_code == 401
         assert call_tool(c, "scan_tag_compliance", host="attacker.example").status_code == 421
         assert initialize(c, "2025-11-25").status_code == 200
-        assert len(rpc(c, "tools/list", {}).json()["result"]["tools"]) == 12
+        assert len(rpc(c, "tools/list", {}).json()["result"]["tools"]) == 14
         denied = call_tool(c, "get_resource_inventory").json()["result"]  # token lacks governance:read
         assert denied["isError"] is True
     assert aws_calls == []
@@ -402,8 +405,11 @@ def test_live_mode_authorized_call_reaches_the_tools_read_only(aws_calls, tmp_pa
     assert r["coverage_complete"] is False and r["discovery_errors"][0]["error"] == {
         "kind": "ACCESS_DENIED", "code": "UnauthorizedOperation", "operation": "ec2:DescribeInstances"}
     assert scan["structuredContent"]["scan_id"] == r["scan_id"]  # reused, one discovery
-    assert aws_calls == ["ec2:DescribeRegions", "sts:GetCallerIdentity", "lambda:ListFunctions", "lambda:ListTags",
-                         "dynamodb:ListTables", "s3:ListBuckets", "ec2:DescribeInstances"]
+    # Services are discovered concurrently, so only the first two calls have a fixed order.
+    assert aws_calls[:2] == ["ec2:DescribeRegions", "sts:GetCallerIdentity"]
+    assert sorted(aws_calls[2:]) == sorted(["lambda:ListFunctions", "lambda:ListTags", "dynamodb:ListTables",
+                                            "s3:ListBuckets", "ec2:DescribeInstances"])
+    assert aws_calls.index("lambda:ListFunctions") < aws_calls.index("lambda:ListTags")
     text = json.dumps([inv, scan])
     assert "bob.admin" not in text and "999988887777" not in text and "is not authorized" not in text
     assert not (tmp_path / "policies").exists()
@@ -474,7 +480,7 @@ def test_streamable_http_client_over_loopback(tmp_path):
                     result = await session.call_tool("get_resource_inventory", {})
                     return init, tools, result
         init, tools, result = anyio.run(run, TOKEN)
-        assert init.protocolVersion == "2025-11-25" and len(tools) == 12
+        assert init.protocolVersion == "2025-11-25" and len(tools) == 14
         assert result.isError is False and result.structuredContent["tool"] == "get_resource_inventory"
         with pytest.raises(Exception):
             anyio.run(run, "wrong-token")

@@ -159,9 +159,12 @@ def summarize(findings: list[TagFinding], service_errors: list[ServiceError]) ->
     )
 
 
-def run_scan(source: DiscoverySource, policy: PolicyVersion) -> GovernanceScan:
+def run_scan(source: DiscoverySource, policy: PolicyVersion, regions: list[str] | None = None,
+             services: list[str] | None = None) -> GovernanceScan:
+    """Discover (everything, or only `regions` / `services`) and evaluate each resource against `policy`."""
     started = datetime.now(UTC)
-    discovery = source.discover()
+    scope = {k: v for k, v in (("regions", regions), ("services", services)) if v}
+    discovery = source.discover(**scope)
     findings = [evaluate(r, policy.document.rules_for(r.resource_type), started) for r in discovery.resources]
     return GovernanceScan(
         scan_id=f"scan-{started:%Y%m%dT%H%M%SZ}-{uuid.uuid4().hex[:6]}",
